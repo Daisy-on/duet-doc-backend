@@ -1,0 +1,1 @@
+"""Duet Doc backend application."""
