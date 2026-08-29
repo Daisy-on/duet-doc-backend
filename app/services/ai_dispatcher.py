@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from app.core.config import Settings
 from app.core.exceptions import AIServiceError
 from app.providers.base import AIProvider
-from app.schemas.ai import AIRequest, AIResult, AIStreamEvent, CloudAITask
+from app.schemas.ai import AIRequest, AIResult, AIStreamEvent, CloudAITask, ToolChoice
 from app.services.prompt_registry import build_messages
 
 
@@ -41,6 +41,12 @@ class AIDispatcher:
         return request.model_copy(update={"messages": messages, "contexts": []})
 
     async def generate(self, request: AIRequest) -> AIResult:
+        if request.tool_choice == ToolChoice.AUTO:
+            raise AIServiceError(
+                "TOOL_CALLS_REQUIRE_STREAMING",
+                "Knowledge search requests must use the streaming endpoint.",
+                status_code=400,
+            )
         decision = self._route(request)
         result = await self._provider.generate(self._prepare(request), decision.model)
         return result.model_copy(update={"route_reason": decision.reason})

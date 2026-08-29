@@ -30,11 +30,32 @@ class MessageRole(StrEnum):
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
+    TOOL = "tool"
 
 
 class ContextSourceType(StrEnum):
     DOCUMENT = "document"
+    MEMO = "memo"
     SELECTION = "selection"
+
+
+class ContextOrigin(StrEnum):
+    MANUAL = "manual"
+    LOCAL_RETRIEVAL = "local_retrieval"
+    CLOUD_RETRIEVAL = "cloud_retrieval"
+
+
+class AICapability(StrEnum):
+    KNOWLEDGE_SEARCH = "knowledge_search"
+
+
+class ToolChoice(StrEnum):
+    NONE = "none"
+    AUTO = "auto"
+
+
+class AssistantToolName(StrEnum):
+    SEARCH_KNOWLEDGE_BASE = "search_knowledge_base"
 
 
 class StreamEventType(StrEnum):
@@ -42,13 +63,41 @@ class StreamEventType(StrEnum):
     REASONING_DELTA = "reasoning_delta"
     TEXT_DELTA = "text_delta"
     USAGE = "usage"
+    TOOL_CALL = "tool_call"
     FINISH = "finish"
     ERROR = "error"
 
 
+class AIToolCall(APIModel):
+    id: str = Field(min_length=1, max_length=200)
+    name: AssistantToolName
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    reasoning_content: str | None = Field(default=None, max_length=50_000)
+
+
+class AIToolContinuation(APIModel):
+    tool_call: AIToolCall
+
+
 class AIMessage(APIModel):
     role: MessageRole
-    content: str = Field(min_length=1, max_length=50_000)
+    content: str = Field(default="", max_length=50_000)
+    tool_calls: list[AIToolCall] = Field(default_factory=list, max_length=1)
+    tool_call_id: str | None = Field(default=None, max_length=200)
+    name: AssistantToolName | None = None
+    reasoning_content: str | None = Field(default=None, max_length=50_000)
+
+    @model_validator(mode="after")
+    def validate_message(self) -> "AIMessage":
+        if self.role == MessageRole.TOOL:
+            if not self.tool_call_id or not self.name:
+                raise ValueError("Tool messages require toolCallId and name.")
+            return self
+        if self.role == MessageRole.ASSISTANT and self.tool_calls:
+            return self
+        if not self.content:
+            raise ValueError("Messages require content unless they contain a tool call.")
+        return self
 
 
 class AIContext(APIModel):
@@ -56,6 +105,11 @@ class AIContext(APIModel):
     title: str = Field(min_length=1, max_length=500)
     content: str = Field(min_length=1, max_length=50_000)
     source_type: ContextSourceType = ContextSourceType.DOCUMENT
+    origin: ContextOrigin = ContextOrigin.MANUAL
+    chunk_id: str | None = Field(default=None, max_length=200)
+    chunk_index: int | None = Field(default=None, ge=0)
+    heading_path: list[str] = Field(default_factory=list, max_length=10)
+    score: float | None = None
 
 
 class AIOptions(APIModel):
@@ -67,6 +121,7 @@ class AIOptions(APIModel):
 class AIMetadata(APIModel):
     session_id: str | None = Field(default=None, max_length=200)
     document_id: str | None = Field(default=None, max_length=200)
+    run_id: str | None = Field(default=None, max_length=200)
 
 
 class AIRequest(APIModel):
@@ -76,6 +131,9 @@ class AIRequest(APIModel):
     instruction: str | None = Field(default=None, max_length=2_000)
     selected_text: str | None = Field(default=None, max_length=50_000)
     contexts: list[AIContext] = Field(default_factory=list, max_length=20)
+    capabilities: set[AICapability] = Field(default_factory=set, max_length=5)
+    tool_choice: ToolChoice = ToolChoice.NONE
+    tool_continuation: AIToolContinuation | None = None
     options: AIOptions = Field(default_factory=AIOptions)
     metadata: AIMetadata | None = None
 
@@ -95,6 +153,21 @@ class AIRequest(APIModel):
             raise ValueError(f"{self.task.value} requests require selectedText.")
         if self.task == CloudAITask.SUMMARIZE and not (self.selected_text or self.contexts):
             raise ValueError("Summarize requests require selectedText or contexts.")
+        if self.capabilities and self.task != CloudAITask.CHAT:
+            raise ValueError("AI capabilities are only available for chat requests.")
+        if (
+            self.tool_choice == ToolChoice.AUTO
+            and AICapability.KNOWLEDGE_SEARCH not in self.capabilities
+        ):
+            raise ValueError("toolChoice auto requires the knowledge_search capability.")
+        if self.tool_continuation and self.tool_choice != ToolChoice.NONE:
+            raise ValueError("Tool continuation requests must disable further tool calls.")
+        if self.tool_continuation and (
+            AICapability.KNOWLEDGE_SEARCH not in self.capabilities
+            or self.tool_continuation.tool_call.name
+            != AssistantToolName.SEARCH_KNOWLEDGE_BASE
+        ):
+            raise ValueError("Invalid tool continuation.")
         return self
 
 
@@ -138,6 +211,7 @@ class AIStreamEvent(APIModel):
     ttft_ms: float | None = None
     total_latency_ms: float | None = None
     usage: AIUsage | None = None
+    tool_call: AIToolCall | None = None
     error: APIError | None = None
 
     def as_sse(self) -> dict[str, Any]:

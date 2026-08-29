@@ -1,8 +1,11 @@
 from app.core.exceptions import AIServiceError
 from app.schemas.ai import (
+    AICapability,
+    AIContext,
     AIMessage,
     AIRequest,
     CloudAITask,
+    ContextOrigin,
     MessageRole,
 )
 
@@ -35,31 +38,70 @@ def _tagged_block(tag: str, content: str) -> str:
     return f"<{tag}>\n{escaped_content}\n</{tag}>"
 
 
-def _system_message(task: CloudAITask) -> AIMessage:
+def _system_message(request: AIRequest) -> AIMessage:
+    tool_policy = ""
+    if AICapability.KNOWLEDGE_SEARCH in request.capabilities:
+        tool_policy = (
+            "\n\n当问题依赖用户自己的文档、小记、历史决策或最近记录时，可以调用知识库检索工具。"
+            "不要为一般知识、翻译、改写或闲聊调用该工具。"
+        )
     return AIMessage(
         role=MessageRole.SYSTEM,
         content=(
-            f"{SYSTEM_PROMPTS[task]}\n\n"
+            f"{SYSTEM_PROMPTS[request.task]}\n\n"
             f"{UNTRUSTED_CONTENT_POLICY}\n\n"
             f"{SYSTEM_CONFIDENTIALITY_POLICY}"
+            f"{tool_policy}"
         ),
     )
 
 
-def _context_text(request: AIRequest) -> str:
-    context_parts = [
-        f"[来源：{context.title} | ID：{context.source_id}]\n{context.content}"
-        for context in request.contexts
-    ]
-    return "\n\n".join(context_parts)
+def _context_priority(context: AIContext) -> tuple[int, float]:
+    return (
+        0 if context.origin == ContextOrigin.MANUAL else 1,
+        -(context.score or 0.0),
+    )
+
+
+def _context_text(request: AIRequest, max_context_chars: int) -> str:
+    selected_parts: list[str] = []
+    total_chars = 0
+
+    for source_number, context in enumerate(
+        sorted(request.contexts, key=_context_priority), start=1
+    ):
+        metadata = [f"来源：{context.title}", f"ID：{context.source_id}"]
+        if context.chunk_id:
+            metadata.append(f"分块：{context.chunk_id}")
+        if context.heading_path:
+            metadata.append(f"章节：{' > '.join(context.heading_path)}")
+
+        part = f"[S{source_number} | {' | '.join(metadata)}]\n{context.content}"
+        separator_chars = 2 if selected_parts else 0
+        if total_chars + separator_chars + len(part) > max_context_chars:
+            continue
+
+        selected_parts.append(part)
+        total_chars += separator_chars + len(part)
+
+    if request.contexts and not selected_parts:
+        raise AIServiceError(
+            "CONTEXT_TOO_LARGE",
+            "Referenced document context is too large.",
+            status_code=413,
+        )
+
+    return "\n\n".join(selected_parts)
 
 
 def _build_chat_messages(request: AIRequest, context_text: str) -> list[AIMessage]:
     client_messages = [
-        message for message in request.messages if message.role != MessageRole.SYSTEM
+        message
+        for message in request.messages
+        if message.role in {MessageRole.USER, MessageRole.ASSISTANT} and not message.tool_calls
     ]
     if not context_text:
-        return [_system_message(request.task), *client_messages]
+        return [_system_message(request), *client_messages]
 
     context_message = AIMessage(
         role=MessageRole.USER,
@@ -80,23 +122,49 @@ def _build_chat_messages(request: AIRequest, context_text: str) -> list[AIMessag
         # safe fallback for malformed histories containing no user turn.
         client_messages.append(context_message)
 
-    return [_system_message(request.task), *client_messages]
+    return [_system_message(request), *client_messages]
+
+
+def _build_tool_continuation_messages(request: AIRequest, context_text: str) -> list[AIMessage]:
+    continuation = request.tool_continuation
+    if not continuation:
+        raise RuntimeError("Missing tool continuation.")
+
+    client_messages = [
+        message
+        for message in request.messages
+        if message.role in {MessageRole.USER, MessageRole.ASSISTANT} and not message.tool_calls
+    ]
+    tool_call = continuation.tool_call
+    tool_result = context_text or "没有找到与本次检索条件匹配的本地知识库内容。"
+
+    return [
+        _system_message(request),
+        *client_messages,
+        AIMessage(
+            role=MessageRole.ASSISTANT,
+            tool_calls=[tool_call],
+            reasoning_content=tool_call.reasoning_content,
+        ),
+        AIMessage(
+            role=MessageRole.TOOL,
+            tool_call_id=tool_call.id,
+            name=tool_call.name,
+            content=_tagged_block("untrusted_context", tool_result),
+        ),
+    ]
 
 
 def build_messages(request: AIRequest, max_context_chars: int) -> list[AIMessage]:
-    context_text = _context_text(request)
-    if len(context_text) > max_context_chars:
-        raise AIServiceError(
-            "CONTEXT_TOO_LARGE",
-            "Referenced document context is too large.",
-            status_code=413,
-        )
+    context_text = _context_text(request, max_context_chars)
 
     if request.task == CloudAITask.CHAT:
+        if request.tool_continuation:
+            return _build_tool_continuation_messages(request, context_text)
         return _build_chat_messages(request, context_text)
 
     instruction = request.instruction or SYSTEM_PROMPTS[request.task]
-    messages = [_system_message(request.task)]
+    messages = [_system_message(request)]
     if context_text:
         messages.append(
             AIMessage(

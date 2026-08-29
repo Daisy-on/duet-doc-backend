@@ -9,12 +9,15 @@ import httpx
 from app.core.config import Settings
 from app.core.exceptions import AIServiceError
 from app.schemas.ai import (
+    AIMessage,
     AIRequest,
     AIResult,
     AIStreamEvent,
     AIUsage,
+    MessageRole,
     StreamEventType,
 )
+from app.services.tool_registry import parse_provider_tool_call, provider_tools
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +48,7 @@ class DeepSeekProvider:
     def _payload(self, request: AIRequest, model: str, *, stream: bool) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model,
-            "messages": [
-                {"role": message.role.value, "content": message.content}
-                for message in request.messages
-            ],
+            "messages": [self._serialize_message(message) for message in request.messages],
             "stream": stream,
             "max_tokens": request.options.max_tokens,
             "temperature": request.options.temperature,
@@ -56,7 +56,36 @@ class DeepSeekProvider:
                 "type": "enabled" if request.options.thinking else "disabled",
             },
         }
+        tools = provider_tools(request)
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = request.tool_choice.value
         return payload
+
+    @staticmethod
+    def _serialize_message(message: AIMessage) -> dict[str, Any]:
+        serialized: dict[str, Any] = {
+            "role": message.role.value,
+            "content": message.content,
+        }
+        if message.role == MessageRole.ASSISTANT and message.reasoning_content:
+            serialized["reasoning_content"] = message.reasoning_content
+        if message.tool_calls:
+            serialized["tool_calls"] = [
+                {
+                    "id": tool_call.id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_call.name.value,
+                        "arguments": json.dumps(tool_call.arguments, ensure_ascii=False),
+                    },
+                }
+                for tool_call in message.tool_calls
+            ]
+        if message.role == MessageRole.TOOL:
+            serialized["tool_call_id"] = message.tool_call_id
+            serialized["name"] = message.name.value if message.name else None
+        return {key: value for key, value in serialized.items() if value is not None}
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -163,6 +192,8 @@ class DeepSeekProvider:
         first_token_ms: float | None = None
         finish_reason: str | None = None
         usage: AIUsage | None = None
+        reasoning_parts: list[str] = []
+        tool_call_parts: dict[int, dict[str, Any]] = {}
 
         try:
             async with self._client.stream(
@@ -208,10 +239,12 @@ class DeepSeekProvider:
 
                     reasoning = delta.get("reasoning_content")
                     content = delta.get("content")
+                    tool_calls = delta.get("tool_calls")
                     if (reasoning or content) and first_token_ms is None:
                         first_token_ms = (perf_counter() - started_at) * 1000
 
                     if reasoning:
+                        reasoning_parts.append(reasoning)
                         yield AIStreamEvent(
                             event=StreamEventType.REASONING_DELTA,
                             request_id=request.request_id,
@@ -223,6 +256,27 @@ class DeepSeekProvider:
                             request_id=request.request_id,
                             text=content,
                         )
+                    if isinstance(tool_calls, list):
+                        for tool_call in tool_calls:
+                            if not isinstance(tool_call, dict):
+                                continue
+                            index = tool_call.get("index")
+                            if not isinstance(index, int):
+                                continue
+                            part = tool_call_parts.setdefault(
+                                index,
+                                {"function": {"arguments": ""}},
+                            )
+                            if isinstance(tool_call.get("id"), str):
+                                part["id"] = tool_call["id"]
+                            function = tool_call.get("function")
+                            if not isinstance(function, dict):
+                                continue
+                            part_function = part["function"]
+                            if isinstance(function.get("name"), str):
+                                part_function["name"] = function["name"]
+                            if isinstance(function.get("arguments"), str):
+                                part_function["arguments"] += function["arguments"]
 
         except AIServiceError:
             raise
@@ -242,6 +296,23 @@ class DeepSeekProvider:
             ) from exc
 
         total_latency_ms = (perf_counter() - started_at) * 1000
+        if finish_reason == "tool_calls":
+            if len(tool_call_parts) != 1:
+                raise AIServiceError(
+                    "INVALID_TOOL_CALL",
+                    "Cloud AI returned an invalid tool call.",
+                    status_code=502,
+                )
+            tool_call = parse_provider_tool_call(next(iter(tool_call_parts.values())), request)
+            if reasoning_parts:
+                tool_call = tool_call.model_copy(
+                    update={"reasoning_content": "".join(reasoning_parts)}
+                )
+            yield AIStreamEvent(
+                event=StreamEventType.TOOL_CALL,
+                request_id=request.request_id,
+                tool_call=tool_call,
+            )
         if usage is not None:
             yield AIStreamEvent(
                 event=StreamEventType.USAGE,
