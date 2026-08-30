@@ -112,7 +112,6 @@ async def test_stream_maps_validated_knowledge_search_tool_call() -> None:
                     "delta": {
                         "tool_calls": [
                             {
-                                "index": 0,
                                 "function": {"arguments": 'GPU","top_k":3}'},
                             }
                         ]
@@ -145,3 +144,54 @@ async def test_stream_maps_validated_knowledge_search_tool_call() -> None:
         "sort_by": "relevance",
     }
     assert events[-1].finish_reason == "tool_calls"
+
+
+async def test_stream_uses_first_valid_tool_call_when_model_requests_multiple() -> None:
+    settings = Settings(deepseek_api_key=SecretStr("test-key"))
+    endpoint = "https://api.deepseek.com/chat/completions"
+    request = AIRequest(
+        request_id="request-multiple-tools",
+        task=CloudAITask.CHAT,
+        messages=[AIMessage(role=MessageRole.USER, content="Search my notes")],
+        capabilities={AICapability.KNOWLEDGE_SEARCH},
+        tool_choice=ToolChoice.AUTO,
+    )
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call-first",
+                            "function": {
+                                "name": "search_knowledge_base",
+                                "arguments": '{"query":"WebGPU"}',
+                            },
+                        },
+                        {
+                            "index": 1,
+                            "id": "call-second",
+                            "function": {
+                                "name": "search_knowledge_base",
+                                "arguments": '{"query":"Vue"}',
+                            },
+                        },
+                    ]
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    }
+    stream_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+
+    async with httpx.AsyncClient() as client:
+        provider = DeepSeekProvider(settings, client)
+        with respx.mock:
+            respx.post(endpoint).mock(return_value=httpx.Response(200, text=stream_body))
+            events = [event async for event in provider.stream(request, "model")]
+
+    assert events[1].event == StreamEventType.TOOL_CALL
+    assert events[1].tool_call is not None
+    assert events[1].tool_call.id == "call-first"
+    assert events[1].tool_call.arguments["query"] == "WebGPU"

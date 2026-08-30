@@ -240,7 +240,7 @@ class DeepSeekProvider:
                     reasoning = delta.get("reasoning_content")
                     content = delta.get("content")
                     tool_calls = delta.get("tool_calls")
-                    if (reasoning or content) and first_token_ms is None:
+                    if (reasoning or content or tool_calls) and first_token_ms is None:
                         first_token_ms = (perf_counter() - started_at) * 1000
 
                     if reasoning:
@@ -260,8 +260,13 @@ class DeepSeekProvider:
                         for tool_call in tool_calls:
                             if not isinstance(tool_call, dict):
                                 continue
-                            index = tool_call.get("index")
+                            index = tool_call.get("index", 0)
                             if not isinstance(index, int):
+                                logger.warning(
+                                    "tool_call_fragment_skipped request_id=%s index_type=%s",
+                                    request.request_id,
+                                    type(index).__name__,
+                                )
                                 continue
                             part = tool_call_parts.setdefault(
                                 index,
@@ -297,13 +302,32 @@ class DeepSeekProvider:
 
         total_latency_ms = (perf_counter() - started_at) * 1000
         if finish_reason == "tool_calls":
-            if len(tool_call_parts) != 1:
+            parsed_tool_calls = []
+            for index, raw_tool_call in sorted(tool_call_parts.items()):
+                try:
+                    parsed_tool_calls.append(parse_provider_tool_call(raw_tool_call, request))
+                except AIServiceError as exc:
+                    logger.warning(
+                        "tool_call_rejected request_id=%s index=%s code=%s",
+                        request.request_id,
+                        index,
+                        exc.code,
+                    )
+
+            if not parsed_tool_calls:
                 raise AIServiceError(
                     "INVALID_TOOL_CALL",
                     "Cloud AI returned an invalid tool call.",
                     status_code=502,
                 )
-            tool_call = parse_provider_tool_call(next(iter(tool_call_parts.values())), request)
+            if len(parsed_tool_calls) > 1:
+                logger.info(
+                    "multiple_tool_calls_collapsed request_id=%s count=%s",
+                    request.request_id,
+                    len(parsed_tool_calls),
+                )
+
+            tool_call = parsed_tool_calls[0]
             if reasoning_parts:
                 tool_call = tool_call.model_copy(
                     update={"reasoning_content": "".join(reasoning_parts)}
