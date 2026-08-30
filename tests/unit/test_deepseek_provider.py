@@ -195,3 +195,49 @@ async def test_stream_uses_first_valid_tool_call_when_model_requests_multiple() 
     assert events[1].tool_call is not None
     assert events[1].tool_call.id == "call-first"
     assert events[1].tool_call.arguments["query"] == "WebGPU"
+
+
+async def test_stream_translates_dsml_tool_markup_without_exposing_it_as_text() -> None:
+    settings = Settings(deepseek_api_key=SecretStr("test-key"))
+    endpoint = "https://api.deepseek.com/chat/completions"
+    request = AIRequest(
+        request_id="request-dsml-tool",
+        task=CloudAITask.CHAT,
+        messages=[AIMessage(role=MessageRole.USER, content="Find my React interview questions")],
+        capabilities={AICapability.KNOWLEDGE_SEARCH},
+        tool_choice=ToolChoice.AUTO,
+    )
+    dsml_content = (
+        "<｜｜DSML｜｜tool_calls>\n"
+        "<｜｜DSML｜｜invoke name=\"search_knowledge_base\">\n"
+        "<｜｜DSML｜｜parameter name=\"query\" string=\"true\">React</｜｜DSML｜｜parameter>\n"
+        "<｜｜DSML｜｜parameter name=\"source_types\" string=\"false\">"
+        "[\"document\"]</｜｜DSML｜｜parameter>\n"
+        "<｜｜DSML｜｜parameter name=\"top_k\" string=\"false\">8</｜｜DSML｜｜parameter>\n"
+        "</｜｜DSML｜｜invoke>\n"
+        "</｜｜DSML｜｜tool_calls>"
+    )
+    chunk = {
+        "choices": [
+            {
+                "delta": {"content": dsml_content},
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    stream_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+
+    async with httpx.AsyncClient() as client:
+        provider = DeepSeekProvider(settings, client)
+        with respx.mock:
+            respx.post(endpoint).mock(return_value=httpx.Response(200, text=stream_body))
+            events = [event async for event in provider.stream(request, "model")]
+
+    assert [event.event for event in events] == [
+        StreamEventType.START,
+        StreamEventType.TOOL_CALL,
+        StreamEventType.FINISH,
+    ]
+    assert events[1].tool_call is not None
+    assert events[1].tool_call.arguments["query"] == "React"
+    assert events[-1].finish_reason == "tool_calls"

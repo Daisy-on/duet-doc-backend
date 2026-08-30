@@ -16,8 +16,14 @@ from app.schemas.ai import (
     AIUsage,
     MessageRole,
     StreamEventType,
+    ToolChoice,
 )
-from app.services.tool_registry import parse_provider_tool_call, provider_tools
+from app.services.tool_registry import (
+    DSML_TOOL_CALL_MARKER,
+    parse_dsml_tool_call,
+    parse_provider_tool_call,
+    provider_tools,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +200,8 @@ class DeepSeekProvider:
         usage: AIUsage | None = None
         reasoning_parts: list[str] = []
         tool_call_parts: dict[int, dict[str, Any]] = {}
+        buffered_content_parts: list[str] = []
+        probe_for_dsml_tool_call = request.tool_choice == ToolChoice.AUTO
 
         try:
             async with self._client.stream(
@@ -251,11 +259,26 @@ class DeepSeekProvider:
                             text=reasoning,
                         )
                     if content:
-                        yield AIStreamEvent(
-                            event=StreamEventType.TEXT_DELTA,
-                            request_id=request.request_id,
-                            text=content,
-                        )
+                        if probe_for_dsml_tool_call:
+                            buffered_content_parts.append(content)
+                            buffered_content = "".join(buffered_content_parts)
+                            probe_content = buffered_content.lstrip()
+                            is_dsml_prefix = DSML_TOOL_CALL_MARKER.startswith(probe_content)
+                            is_complete_dsml = probe_content.startswith(DSML_TOOL_CALL_MARKER)
+                            if not (is_dsml_prefix or is_complete_dsml):
+                                probe_for_dsml_tool_call = False
+                                buffered_content_parts.clear()
+                                yield AIStreamEvent(
+                                    event=StreamEventType.TEXT_DELTA,
+                                    request_id=request.request_id,
+                                    text=buffered_content,
+                                )
+                        else:
+                            yield AIStreamEvent(
+                                event=StreamEventType.TEXT_DELTA,
+                                request_id=request.request_id,
+                                text=content,
+                            )
                     if isinstance(tool_calls, list):
                         for tool_call in tool_calls:
                             if not isinstance(tool_call, dict):
@@ -301,6 +324,8 @@ class DeepSeekProvider:
             ) from exc
 
         total_latency_ms = (perf_counter() - started_at) * 1000
+        buffered_content = "".join(buffered_content_parts)
+        dsml_tool_call = parse_dsml_tool_call(buffered_content, request)
         if finish_reason == "tool_calls":
             parsed_tool_calls = []
             for index, raw_tool_call in sorted(tool_call_parts.items()):
@@ -314,7 +339,7 @@ class DeepSeekProvider:
                         exc.code,
                     )
 
-            if not parsed_tool_calls:
+            if not parsed_tool_calls and dsml_tool_call is None:
                 raise AIServiceError(
                     "INVALID_TOOL_CALL",
                     "Cloud AI returned an invalid tool call.",
@@ -327,7 +352,9 @@ class DeepSeekProvider:
                     len(parsed_tool_calls),
                 )
 
-            tool_call = parsed_tool_calls[0]
+            tool_call = parsed_tool_calls[0] if parsed_tool_calls else dsml_tool_call
+            if tool_call is None:
+                raise RuntimeError("Missing parsed tool call.")
             if reasoning_parts:
                 tool_call = tool_call.model_copy(
                     update={"reasoning_content": "".join(reasoning_parts)}
@@ -336,6 +363,23 @@ class DeepSeekProvider:
                 event=StreamEventType.TOOL_CALL,
                 request_id=request.request_id,
                 tool_call=tool_call,
+            )
+        elif dsml_tool_call is not None:
+            if reasoning_parts:
+                dsml_tool_call = dsml_tool_call.model_copy(
+                    update={"reasoning_content": "".join(reasoning_parts)}
+                )
+            finish_reason = "tool_calls"
+            yield AIStreamEvent(
+                event=StreamEventType.TOOL_CALL,
+                request_id=request.request_id,
+                tool_call=dsml_tool_call,
+            )
+        elif buffered_content:
+            yield AIStreamEvent(
+                event=StreamEventType.TEXT_DELTA,
+                request_id=request.request_id,
+                text=buffered_content,
             )
         if usage is not None:
             yield AIStreamEvent(

@@ -44,6 +44,7 @@ def _system_message(request: AIRequest) -> AIMessage:
         tool_policy = (
             "\n\n当问题依赖用户自己的文档、小记、历史决策或最近记录时，可以调用知识库检索工具。"
             "不要为一般知识、翻译、改写或闲聊调用该工具。"
+            "仅使用原生工具调用接口，绝不在回答中输出 DSML、XML、JSON 或其他工具语法。"
         )
     return AIMessage(
         role=MessageRole.SYSTEM,

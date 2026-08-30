@@ -1,5 +1,7 @@
 import json
+import re
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -36,6 +38,17 @@ KNOWLEDGE_SEARCH_TOOL: dict[str, Any] = {
         "parameters": KnowledgeSearchArguments.model_json_schema(),
     },
 }
+
+DSML_TOOL_CALL_MARKER = "<｜｜DSML｜｜tool_calls>"
+_DSML_INVOKE_PATTERN = re.compile(
+    r'<｜｜DSML｜｜invoke\s+name="(?P<name>[^"]+)">(?P<body>.*?)</｜｜DSML｜｜invoke>',
+    re.DOTALL,
+)
+_DSML_PARAMETER_PATTERN = re.compile(
+    r'<｜｜DSML｜｜parameter\s+name="(?P<name>[^"]+)"'
+    r'(?:\s+string="(?P<string>true|false)")?>(?P<value>.*?)</｜｜DSML｜｜parameter>',
+    re.DOTALL,
+)
 
 
 def provider_tools(request: AIRequest) -> list[dict[str, Any]]:
@@ -95,4 +108,46 @@ def parse_provider_tool_call(raw_call: dict[str, Any], request: AIRequest) -> AI
         id=tool_call_id,
         name=name,
         arguments=validated_arguments.model_dump(by_alias=True, exclude_none=True),
+    )
+
+
+def parse_dsml_tool_call(content: str, request: AIRequest) -> AIToolCall | None:
+    """Translate a model-emitted DSML fallback into the same validated tool call."""
+    if DSML_TOOL_CALL_MARKER not in content:
+        return None
+
+    normalized_content = content.replace("\\</｜｜DSML", "</｜｜DSML")
+    invoke_match = _DSML_INVOKE_PATTERN.search(normalized_content)
+    if not invoke_match:
+        raise AIServiceError(
+            "INVALID_TOOL_CALL",
+            "Cloud AI returned an invalid tool call.",
+            status_code=502,
+        )
+
+    arguments: dict[str, Any] = {}
+    for parameter_match in _DSML_PARAMETER_PATTERN.finditer(invoke_match.group("body")):
+        name = parameter_match.group("name")
+        value = parameter_match.group("value").strip()
+        if parameter_match.group("string") == "false":
+            try:
+                arguments[name] = json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise AIServiceError(
+                    "INVALID_TOOL_ARGUMENTS",
+                    "Cloud AI returned invalid tool arguments.",
+                    status_code=502,
+                ) from exc
+        else:
+            arguments[name] = value
+
+    return parse_provider_tool_call(
+        {
+            "id": f"call_dsml_{uuid4().hex}",
+            "function": {
+                "name": invoke_match.group("name"),
+                "arguments": json.dumps(arguments, ensure_ascii=False),
+            },
+        },
+        request,
     )
