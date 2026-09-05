@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     app_host: str = "127.0.0.1"
     app_port: int = 8000
     frontend_origins: str = "http://localhost:5173"
+    database_url: SecretStr | None = None
+    dev_auth_enabled: bool = False
+    dev_user_id: str = "00000000-0000-0000-0000-000000000001"
 
     deepseek_api_key: SecretStr | None = None
     deepseek_base_url: str = "https://api.deepseek.com"

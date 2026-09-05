@@ -1,6 +1,8 @@
 # Duet Doc Backend
 
-Duet Doc 的 Python/FastAPI 后端。当前仅提供云端 AI 网关、云端模型调度和 SSE 流式响应；浏览器端幽灵文本仍由 WebGPU 本地模型执行。
+Duet Doc 的 Python/FastAPI 后端，提供云端 AI 网关、SSE 流式响应，以及 PostgreSQL 文档同步接口。浏览器端幽灵文本仍由 WebGPU 本地模型执行。
+
+数据库迁移、开发测试身份和同步接口协议见 [同步说明](docs/sync.md)。同步功能目前仅用于本机开发验证，前端接入将在后续批次完成。
 
 ## 环境要求
 
