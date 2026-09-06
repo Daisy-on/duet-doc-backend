@@ -7,7 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.sync import PushRequest
-from app.services.sync_service import pull, push
+from app.services.sync_service import pull, push, workspace_for_user
 
 router = APIRouter(tags=["sync"])
 
@@ -75,3 +75,16 @@ async def pull_changes(
     limit: int = Query(default=100, ge=1, le=200),
 ):
     return await pull(session, user, workspace_id, cursor, limit)
+
+
+@router.get("/sync/status")
+async def sync_status(
+    workspace_id: UUID,
+    user: CurrentUser,
+    session: Session,
+):
+    workspace = await workspace_for_user(session, workspace_id, user)
+    return {
+        "workspace_id": workspace_id,
+        "current_sequence": workspace["sync_sequence"],
+    }

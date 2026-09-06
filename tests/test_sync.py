@@ -113,9 +113,27 @@ async def test_isolation(sync_client):
     assert (
         await client.get("/api/v1/sync/pull", params={"workspace_id": other})
     ).status_code == 404
+    assert (
+        await client.get("/api/v1/sync/status", params={"workspace_id": other})
+    ).status_code == 404
     workspaces = (await client.get("/api/v1/workspaces")).json()["workspaces"]
     assert len(workspaces) == 1
     assert workspaces[0]["id"] != other
+
+
+@pytest.mark.asyncio
+async def test_sync_status_tracks_workspace_sequence(sync_client):
+    client, wid, _, _ = sync_client
+    initial = await client.get("/api/v1/sync/status", params={"workspace_id": wid})
+    assert initial.status_code == 200
+    assert initial.json() == {"workspace_id": wid, "current_sequence": 0}
+
+    pushed = await client.post("/api/v1/sync/push", json=mutation(wid, [kb()]))
+    assert pushed.status_code == 200
+
+    current = await client.get("/api/v1/sync/status", params={"workspace_id": wid})
+    assert current.status_code == 200
+    assert current.json() == {"workspace_id": wid, "current_sequence": 1}
 
 
 @pytest.mark.asyncio
