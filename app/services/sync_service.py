@@ -8,7 +8,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.sync import DATA_MODELS, PushRequest
 
-TABLES = {"knowledge_base": "knowledge_bases", "group": "groups", "document": "documents"}
+TABLES = {
+    "knowledge_base": "knowledge_bases",
+    "group": "groups",
+    "document": "documents",
+    "chat_session": "chat_sessions",
+    "chat_message": "chat_messages",
+}
+
+JSON_COLUMNS = {
+    "chat_message": {
+        "web_search_urls",
+        "referenced_docs",
+        "knowledge_sources",
+        "ai_metadata",
+    }
+}
 
 
 async def workspace_for_user(session, workspace_id, user_id, *, lock=False):
@@ -72,6 +87,9 @@ def validate_graph(entities):
                     depth += 1
                 if depth != row["depth"] or depth > 5:
                     raise HTTPException(409, "Invalid group depth")
+    for row in active["chat_message"].values():
+        if row["session_id"] not in active["chat_session"]:
+            raise HTTPException(409, "Chat message has no active session")
 
 
 async def push(session: AsyncSession, user_id, request: PushRequest):
@@ -119,6 +137,10 @@ async def push(session: AsyncSession, user_id, request: PushRequest):
                 **current,
                 "deleted_at": True,
             }
+            if operation.entity_type == "chat_session":
+                for message in entities["chat_message"].values():
+                    if message["session_id"] == operation.entity_id:
+                        message["deleted_at"] = True
         else:
             assert operation.data is not None
             entities[operation.entity_type][operation.entity_id] = {
@@ -143,19 +165,36 @@ async def push(session: AsyncSession, user_id, request: PushRequest):
                 ),
                 params,
             )
+            if operation.entity_type == "chat_session":
+                await session.execute(
+                    text(
+                        "UPDATE chat_messages SET deleted_at=now(), updated_at=now(), "
+                        "revision=revision+1 WHERE workspace_id=:wid AND session_id=:id "
+                        "AND deleted_at IS NULL"
+                    ),
+                    params,
+                )
         else:
             data = DATA_MODELS[operation.entity_type].model_validate(operation.data).model_dump()
             columns = list(data)
             params.update(data)
-            assignments = ", ".join(
-                f"{col}=EXCLUDED.{col}" for col in columns if col != "created_at"
-            )
+            json_columns = JSON_COLUMNS.get(operation.entity_type, set())
+            for column in json_columns:
+                if params[column] is not None:
+                    params[column] = json.dumps(jsonable_encoder(params[column]))
+            assignments = [f"{col}=EXCLUDED.{col}" for col in columns if col != "created_at"]
+            assignments.extend(["revision=EXCLUDED.revision", "deleted_at=NULL"])
+            if "updated_at" not in columns:
+                assignments.append("updated_at=now()")
+            values = [
+                f"CAST(:{column} AS jsonb)" if column in json_columns else f":{column}"
+                for column in columns
+            ]
             await session.execute(
                 text(
                     f"INSERT INTO {table} (workspace_id,id,revision,{','.join(columns)}) "
-                    f"VALUES (:wid,:id,:rev,{','.join(':' + col for col in columns)}) "
-                    f"ON CONFLICT (workspace_id,id) DO UPDATE SET {assignments}, "
-                    "revision=EXCLUDED.revision, updated_at=now(), deleted_at=NULL"
+                    f"VALUES (:wid,:id,:rev,{','.join(values)}) "
+                    f"ON CONFLICT (workspace_id,id) DO UPDATE SET {','.join(assignments)}"
                 ),
                 params,
             )

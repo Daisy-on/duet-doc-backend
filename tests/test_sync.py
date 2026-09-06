@@ -81,6 +81,49 @@ def document():
     }
 
 
+def chat_session(entity_id="session", revision=0):
+    return {
+        "entity_type": "chat_session",
+        "entity_id": entity_id,
+        "operation": "upsert",
+        "base_revision": revision,
+        "data": {
+            "title": "Duet assistant",
+            "is_pinned": False,
+            "created_at": "2026-09-06T00:00:00Z",
+            "updated_at": "2026-09-06T00:00:02Z",
+        },
+    }
+
+
+def chat_message(status="complete"):
+    return {
+        "entity_type": "chat_message",
+        "entity_id": "message",
+        "operation": "upsert",
+        "base_revision": 0,
+        "data": {
+            "session_id": "session",
+            "role": "assistant",
+            "content": "A synced answer",
+            "status": status,
+            "web_search_urls": [{"title": "Example", "url": "https://example.com"}],
+            "referenced_docs": [{"id": "doc", "title": "Note"}],
+            "knowledge_sources": [
+                {
+                    "source_id": "doc",
+                    "source_type": "document",
+                    "title": "Note",
+                    "chunk_index": 0,
+                    "heading_path": ["Section"],
+                }
+            ],
+            "ai_metadata": {"provider": "deepseek", "usage": {"totalTokens": 42}},
+            "created_at": "2026-09-06T00:00:01Z",
+        },
+    }
+
+
 def mutation(wid, operations):
     return {"workspace_id": wid, "mutation_id": str(uuid4()), "operations": operations}
 
@@ -134,6 +177,71 @@ async def test_sync_status_tracks_workspace_sequence(sync_client):
     current = await client.get("/api/v1/sync/status", params={"workspace_id": wid})
     assert current.status_code == 200
     assert current.json() == {"workspace_id": wid, "current_sequence": 1}
+
+
+@pytest.mark.asyncio
+async def test_chat_session_and_message_sync(sync_client):
+    client, wid, _, session = sync_client
+    body = mutation(wid, [chat_message(), chat_session()])
+
+    pushed = await client.post("/api/v1/sync/push", json=body)
+    assert pushed.status_code == 200
+    assert [item["entity_type"] for item in pushed.json()["results"]] == [
+        "chat_session",
+        "chat_message",
+    ]
+
+    retry = await client.post("/api/v1/sync/push", json=body)
+    assert retry.json() == pushed.json()
+    assert (
+        await session.scalar(
+            text("SELECT count(*) FROM chat_messages WHERE workspace_id=:wid"), {"wid": wid}
+        )
+        == 1
+    )
+    stored_activity_at = await session.scalar(
+        text("SELECT updated_at FROM chat_sessions WHERE workspace_id=:wid AND id='session'"),
+        {"wid": wid},
+    )
+    assert stored_activity_at.isoformat() == "2026-09-06T00:00:02+00:00"
+
+    page = (await client.get("/api/v1/sync/pull", params={"workspace_id": wid})).json()
+    assert [change["entity_type"] for change in page["changes"]] == [
+        "chat_session",
+        "chat_message",
+    ]
+    message_snapshot = page["changes"][1]["snapshot"]
+    assert message_snapshot["content"] == "A synced answer"
+    assert message_snapshot["ai_metadata"]["usage"]["totalTokens"] == 42
+
+    delete_session = {
+        "entity_type": "chat_session",
+        "entity_id": "session",
+        "operation": "delete",
+        "base_revision": 1,
+    }
+    deleted = await client.post("/api/v1/sync/push", json=mutation(wid, [delete_session]))
+    assert deleted.status_code == 200
+    assert await session.scalar(
+        text(
+            "SELECT deleted_at IS NOT NULL FROM chat_messages "
+            "WHERE workspace_id=:wid AND id='message'"
+        ),
+        {"wid": wid},
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_message_requires_active_session_and_final_status(sync_client):
+    client, wid, _, _ = sync_client
+    missing_parent = await client.post("/api/v1/sync/push", json=mutation(wid, [chat_message()]))
+    assert missing_parent.status_code == 409
+
+    streaming = await client.post(
+        "/api/v1/sync/push",
+        json=mutation(wid, [chat_session(), chat_message(status="streaming")]),
+    )
+    assert streaming.status_code == 422
 
 
 @pytest.mark.asyncio
