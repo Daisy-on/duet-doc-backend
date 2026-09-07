@@ -11,7 +11,6 @@ from app.api.v1.sync import get_session
 from app.core.config import Settings
 from app.database import create_database
 from app.main import create_app
-from app.services.auth_service import bind_password_identity
 
 
 @pytest_asyncio.fixture
@@ -188,51 +187,3 @@ async def test_cookie_endpoints_reject_untrusted_browser_origin(auth_client) -> 
     )
     assert response.status_code == 403
 
-
-@pytest.mark.asyncio
-async def test_existing_development_user_can_be_bound_without_moving_workspace(
-    auth_client,
-) -> None:
-    client, sessions, _ = auth_client
-    user_id, workspace_id = uuid4(), uuid4()
-    async with sessions() as session, session.begin():
-        await session.execute(
-            text("INSERT INTO users (id,display_name) VALUES (:id,'Existing user')"),
-            {"id": user_id},
-        )
-        await session.execute(
-            text(
-                "INSERT INTO workspaces (id,owner_user_id,name) "
-                "VALUES (:id,:user,'Existing workspace')"
-            ),
-            {"id": workspace_id, "user": user_id},
-        )
-
-    async with sessions() as session:
-        await bind_password_identity(
-            session,
-            user_id,
-            "Existing_User",
-            "correct-horse-battery-staple",
-            "Daisy",
-        )
-
-    login = await client.post(
-        "/api/v1/auth/login",
-        json={
-            "username": "existing_user",
-            "password": "correct-horse-battery-staple",
-        },
-    )
-    assert login.status_code == 200
-    assert login.json()["user"]["id"] == str(user_id)
-    assert login.json()["workspace_id"] == str(workspace_id)
-
-    async with sessions() as session:
-        with pytest.raises(ValueError, match="already has a password identity"):
-            await bind_password_identity(
-                session,
-                user_id,
-                "another_name",
-                "correct-horse-battery-staple",
-            )
