@@ -22,6 +22,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(resolved_settings.app_env)
     if resolved_settings.dev_auth_enabled and resolved_settings.app_env != "development":
         raise ValueError("DEV_AUTH_ENABLED is restricted to development")
+    if (
+        resolved_settings.app_env != "development"
+        and resolved_settings.auth_jwt_secret.get_secret_value()
+        == "development-only-change-me-32-bytes"
+    ):
+        raise ValueError("AUTH_JWT_SECRET must be configured outside development")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -54,7 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_origins=resolved_settings.cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "X-Request-ID"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     )
 
     @app.middleware("http")

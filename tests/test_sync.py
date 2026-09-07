@@ -6,6 +6,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
+from app.api.dependencies import get_database_session
 from app.api.v1.sync import get_session
 from app.core.config import Settings
 from app.database import create_database
@@ -39,6 +40,7 @@ async def sync_client():
                 yield session
 
         app.dependency_overrides[get_session] = override_session
+        app.dependency_overrides[get_database_session] = override_session
         try:
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -333,6 +335,17 @@ async def test_disabled_user_and_unknown_parent(sync_client):
         {"wid": wid},
     )
     assert (await client.get("/api/v1/workspaces")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_invalid_bearer_token_does_not_use_development_fallback(sync_client):
+    client, _, _, _ = sync_client
+    for authorization in ("Bearer invalid-token", "Basic invalid-credentials"):
+        response = await client.get(
+            "/api/v1/workspaces",
+            headers={"Authorization": authorization},
+        )
+        assert response.status_code == 401
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     dev_auth_enabled: bool = False
     dev_user_id: str = "00000000-0000-0000-0000-000000000001"
 
+    auth_jwt_secret: SecretStr = SecretStr("development-only-change-me-32-bytes")
+    auth_jwt_issuer: str = "duet-doc-backend"
+    auth_jwt_audience: str = "duet-doc-app"
+    auth_access_token_minutes: int = 15
+    auth_refresh_token_days: int = 30
+    auth_refresh_cookie_name: str = "duet_refresh_token"
+
     deepseek_api_key: SecretStr | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_fast_model: str = "deepseek-v4-flash"
@@ -32,6 +39,10 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.frontend_origins.split(",") if origin.strip()]
+
+    @property
+    def auth_refresh_cookie_secure(self) -> bool:
+        return self.app_env != "development"
 
 
 @lru_cache

@@ -3,6 +3,7 @@ from typing import cast
 from fastapi import APIRouter, Request
 from sse_starlette import EventSourceResponse
 
+from app.api.dependencies import AuthenticatedUser
 from app.core.exceptions import AIServiceError
 from app.schemas.ai import (
     AIRequest,
@@ -21,12 +22,14 @@ def get_dispatcher(request: Request) -> AIDispatcher:
 
 
 @router.post("/generate", response_model=AIResult)
-async def generate(body: AIRequest, request: Request) -> AIResult:
+async def generate(body: AIRequest, request: Request, current_user: AuthenticatedUser) -> AIResult:
     return await get_dispatcher(request).generate(body)
 
 
 @router.post("/stream")
-async def stream(body: AIRequest, request: Request) -> EventSourceResponse:
+async def stream(
+    body: AIRequest, request: Request, current_user: AuthenticatedUser
+) -> EventSourceResponse:
     async def event_source():
         try:
             async for event in get_dispatcher(request).stream(body):
