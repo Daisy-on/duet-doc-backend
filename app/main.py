@@ -16,6 +16,8 @@ from app.providers.deepseek import DeepSeekProvider
 from app.schemas.ai import APIError, ErrorResponse
 from app.services.ai_dispatcher import AIDispatcher
 from app.services.model_delivery import create_model_delivery_service
+from app.services.model_manifest_manager import ModelManifestManager, PostgresModelGrantIssuer
+from app.services.rate_limit import InMemoryTokenBucket
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -39,11 +41,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         client = httpx.AsyncClient(timeout=timeout)
         provider = DeepSeekProvider(resolved_settings, client)
         app.state.ai_dispatcher = AIDispatcher(resolved_settings, provider)
-        app.state.model_delivery_service = create_model_delivery_service(resolved_settings)
+        model_delivery = create_model_delivery_service(resolved_settings)
+        app.state.model_manifest_manager = None
         engine = None
         if resolved_settings.database_url:
             engine, sessions = create_database(resolved_settings)
             app.state.database_sessions = sessions
+            if model_delivery is not None:
+                grant_issuer = PostgresModelGrantIssuer(
+                    sessions,
+                    resolved_settings.model_manifest_user_hourly_limit,
+                    resolved_settings.model_manifest_user_daily_limit,
+                )
+                app.state.model_manifest_manager = ModelManifestManager(
+                    model_delivery,
+                    grant_issuer,
+                    resolved_settings.model_manifest_cache_safety_seconds,
+                )
         try:
             yield
         finally:
@@ -57,6 +71,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = resolved_settings
+    app.state.model_manifest_ip_limiter = InMemoryTokenBucket(
+        resolved_settings.model_manifest_ip_rate_per_minute,
+        60,
+        resolved_settings.model_manifest_ip_burst,
+    )
+    app.state.auth_register_ip_limiter = InMemoryTokenBucket(
+        resolved_settings.auth_register_ip_limit_per_hour,
+        3_600,
+    )
+    app.state.auth_login_ip_limiter = InMemoryTokenBucket(
+        resolved_settings.auth_login_ip_limit_per_minute,
+        60,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=resolved_settings.cors_origins,

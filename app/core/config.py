@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     oss_bucket: str | None = None
     oss_ecs_role_name: str | None = None
     model_download_url_ttl_seconds: int = Field(default=900, ge=60, le=3_600)
+    model_manifest_user_hourly_limit: int = Field(default=3, ge=1, le=100)
+    model_manifest_user_daily_limit: int = Field(default=8, ge=1, le=1_000)
+    model_manifest_cache_safety_seconds: int = Field(default=30, ge=0, le=300)
+    model_manifest_ip_rate_per_minute: int = Field(default=5, ge=1, le=1_000)
+    model_manifest_ip_burst: int = Field(default=3, ge=0, le=1_000)
+    auth_register_ip_limit_per_hour: int = Field(default=5, ge=1, le=1_000)
+    auth_login_ip_limit_per_minute: int = Field(default=10, ge=1, le=1_000)
+    trust_proxy_headers: bool = False
 
     @property
     def cors_origins(self) -> list[str]:

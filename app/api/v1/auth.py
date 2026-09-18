@@ -11,6 +11,7 @@ from app.schemas.auth import (
     WorkspaceSummary,
 )
 from app.services.auth_service import login_user, logout_user, refresh_user_session, register_user
+from app.services.rate_limit import RateLimitExceeded, get_client_ip
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -45,11 +46,30 @@ def _clear_refresh_cookie(response: Response, request: Request) -> None:
     )
 
 
+async def _enforce_auth_ip_limit(request: Request, limiter_name: str) -> None:
+    settings = request.app.state.settings
+    client_ip = get_client_ip(request, settings.trust_proxy_headers)
+    limiter = getattr(request.app.state, limiter_name)
+    try:
+        await limiter.check(client_ip)
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "AUTH_RATE_LIMITED",
+                "message": "认证请求过于频繁，请稍后重试",
+                "retry_after_seconds": exc.retry_after_seconds,
+            },
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+
+
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     body: RegisterRequest, request: Request, response: Response, session: DatabaseSession
 ) -> AuthResponse:
     _validate_cookie_origin(request)
+    await _enforce_auth_ip_limit(request, "auth_register_ip_limiter")
     issued = await register_user(session, body, request.app.state.settings)
     _set_refresh_cookie(response, request, issued.refresh_token)
     return issued.response
@@ -60,6 +80,7 @@ async def login(
     body: LoginRequest, request: Request, response: Response, session: DatabaseSession
 ) -> AuthResponse:
     _validate_cookie_origin(request)
+    await _enforce_auth_ip_limit(request, "auth_login_ip_limiter")
     issued = await login_user(session, body, request.app.state.settings)
     _set_refresh_cookie(response, request, issued.refresh_token)
     return issued.response

@@ -124,12 +124,20 @@ class ModelDeliveryService:
         self._signer = signer
         self._ttl = timedelta(seconds=ttl_seconds)
 
-    def get_manifest(self, model_id: str) -> ModelManifest:
+    @property
+    def ttl(self) -> timedelta:
+        return self._ttl
+
+    def validate_model_id(self, model_id: str) -> None:
+        if model_id not in MODEL_CATALOG:
+            raise ModelNotFoundError(model_id)
+
+    def get_manifest(self, model_id: str, now: datetime | None = None) -> ModelManifest:
         spec = MODEL_CATALOG.get(model_id)
         if spec is None:
             raise ModelNotFoundError(model_id)
 
-        expires_at = datetime.now(UTC) + self._ttl
+        expires_at = (now or datetime.now(UTC)) + self._ttl
         files = [
             ModelManifestFile(
                 path=file.path,
