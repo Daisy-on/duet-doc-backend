@@ -15,6 +15,7 @@ from app.database import create_database
 from app.providers.deepseek import DeepSeekProvider
 from app.schemas.ai import APIError, ErrorResponse
 from app.services.ai_dispatcher import AIDispatcher
+from app.services.model_delivery import create_model_delivery_service
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -38,6 +39,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         client = httpx.AsyncClient(timeout=timeout)
         provider = DeepSeekProvider(resolved_settings, client)
         app.state.ai_dispatcher = AIDispatcher(resolved_settings, provider)
+        app.state.model_delivery_service = create_model_delivery_service(resolved_settings)
         engine = None
         if resolved_settings.database_url:
             engine, sessions = create_database(resolved_settings)

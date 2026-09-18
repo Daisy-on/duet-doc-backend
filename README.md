@@ -35,6 +35,7 @@ uv run uvicorn app.main:app --reload
 ```text
 POST /api/v1/ai/generate
 POST /api/v1/ai/stream
+GET  /api/v1/models/{model_id}/manifest
 ```
 
 请求示例：
@@ -54,6 +55,13 @@ POST /api/v1/ai/stream
 ```
 
 流式接口使用 SSE，事件包括 `start`、`reasoning_delta`、`text_delta`、`usage`、`finish` 和 `error`。
+
+模型清单接口仅接受服务端白名单中的模型 ID，并为每个私有 OSS 文件签发短期下载地址。生产环境通过 ECS 实例 RAM Role 获取自动轮换的临时凭证，不需要在 `.env` 保存 AccessKey。当前模型 ID：
+
+```text
+multilingual-e5-base-fp16
+qwen3.5-0.8b-opt-q4f16
+```
 
 ## 服务器容器部署
 

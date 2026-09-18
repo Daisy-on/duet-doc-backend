@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     ai_read_timeout_seconds: float = 120
     ai_max_messages: int = 50
     ai_max_context_chars: int = 50_000
+
+    oss_region: str = "cn-chengdu"
+    oss_endpoint: str = "https://oss-cn-chengdu.aliyuncs.com"
+    oss_bucket: str | None = None
+    oss_ecs_role_name: str | None = None
+    model_download_url_ttl_seconds: int = Field(default=900, ge=60, le=3_600)
 
     @property
     def cors_origins(self) -> list[str]:

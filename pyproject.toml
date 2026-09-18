@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.19.2",
+    "alibabacloud-credentials>=1.0.12",
+    "alibabacloud-oss-v2>=1.4.0",
     "asyncpg>=0.31.0",
     "fastapi>=0.139.2",
     "httpx>=0.28.1",
