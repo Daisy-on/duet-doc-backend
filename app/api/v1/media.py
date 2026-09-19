@@ -5,13 +5,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, cast
 from uuid import UUID
 
-from alibabacloud_oss_v2.exceptions import ServiceError
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 
 from app.api.dependencies import AuthenticatedUser, DatabaseSession
 from app.schemas.media import MediaAccess, MediaState, UploadRequest, UploadResponse
 from app.services.media_storage import MediaStorage
+from app.services.oss_client import oss_service_error
 from app.services.sync_service import workspace_for_user
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/media", tags=["media"])
@@ -32,14 +32,17 @@ Storage = Annotated[MediaStorage, Depends(get_media_storage)]
 async def storage_call[T](operation: Callable[[], T]) -> T:
     try:
         return await asyncio.to_thread(operation)
-    except ServiceError as exc:
-        if exc.status_code == 404:
-            raise HTTPException(409, "Image upload is not complete") from exc
-        logger.warning("OSS media request failed: status=%s", exc.status_code)
-        raise HTTPException(502, "Media storage request failed") from exc
     except Exception as exc:
+        service_error = oss_service_error(exc)
+        if service_error is not None and service_error.status_code == 404:
+            raise HTTPException(409, "Image upload is not complete") from exc
         # Do not log SDK exceptions: they can contain signed URLs and credentials.
-        logger.warning("OSS media request failed: %s", type(exc).__name__)
+        logger.warning(
+            "OSS media request failed: type=%s status=%s code=%s",
+            type(exc).__name__,
+            service_error.status_code if service_error else None,
+            service_error.code if service_error else None,
+        )
         raise HTTPException(502, "Media storage request failed") from exc
 
 

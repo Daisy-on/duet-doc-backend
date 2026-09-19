@@ -1,8 +1,19 @@
 import alibabacloud_oss_v2 as oss
 from alibabacloud_credentials.client import Client as CredentialClient
 from alibabacloud_credentials.models import Config as CredentialConfig
+from alibabacloud_oss_v2.exceptions import OperationError, ServiceError
 
 from app.core.config import Settings
+
+
+def oss_service_error(exc: BaseException) -> ServiceError | None:
+    current: BaseException = exc
+    while isinstance(current, OperationError):
+        nested = current.unwrap()
+        if not isinstance(nested, BaseException):
+            return None
+        current = nested
+    return current if isinstance(current, ServiceError) else None
 
 
 def create_oss_client(settings: Settings) -> oss.Client:

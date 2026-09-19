@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import httpx
 import pytest_asyncio
-from alibabacloud_oss_v2.exceptions import ServiceError
+from alibabacloud_oss_v2.exceptions import OperationError, ServiceError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -27,14 +27,17 @@ class FakeStorage:
 
     def head(self, key):
         if key not in self.objects:
-            raise ServiceError(
-                status_code=404,
-                code="NoSuchKey",
-                request_id="test",
-                message="Not found",
-                ec="",
-                timestamp="",
-                request_target="",
+            raise OperationError(
+                name="HeadObject",
+                error=ServiceError(
+                    status_code=404,
+                    code="NoSuchKey",
+                    request_id="test",
+                    message="Not found",
+                    ec="",
+                    timestamp="",
+                    request_target="",
+                ),
             )
         return self.objects[key]
 

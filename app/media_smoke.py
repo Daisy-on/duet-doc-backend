@@ -7,10 +7,10 @@ from uuid import uuid4
 
 import alibabacloud_oss_v2 as oss
 import httpx
-from alibabacloud_oss_v2.exceptions import ServiceError
 
 from app.core.config import Settings
 from app.services.media_storage import MediaStorage
+from app.services.oss_client import oss_service_error
 
 
 def main() -> None:
@@ -51,8 +51,9 @@ def main() -> None:
             storage.client.delete_object(oss.DeleteObjectRequest(bucket=storage.bucket, key=key))
             try:
                 storage.head(key)
-            except ServiceError as exc:
-                if exc.status_code != 404:
+            except Exception as exc:
+                service_error = oss_service_error(exc)
+                if service_error is None or service_error.status_code != 404:
                     raise
             else:
                 raise RuntimeError("Test object still exists after deletion")
@@ -66,5 +67,11 @@ if __name__ == "__main__":
         main()
     except Exception as exc:
         # SDK/HTTP exception strings may include credentials or signed URLs.
-        print(f"验证失败：{type(exc).__name__}，请检查角色权限、Bucket 和网络配置。")
+        service_error = oss_service_error(exc)
+        detail = (
+            f"HTTP {service_error.status_code}，OSS 错误码 {service_error.code}"
+            if service_error is not None
+            else type(exc).__name__
+        )
+        print(f"验证失败：{detail}，请检查角色权限、Bucket 和网络配置。")
         raise SystemExit(1) from None
