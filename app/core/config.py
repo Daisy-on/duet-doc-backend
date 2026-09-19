@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     oss_endpoint: str = "https://oss-cn-chengdu.aliyuncs.com"
     oss_bucket: str | None = None
     oss_ecs_role_name: str | None = None
+    oss_media_bucket: str | None = None
+    media_max_size_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
+    media_url_ttl_seconds: int = Field(default=900, ge=60, le=3600)
     model_download_url_ttl_seconds: int = Field(default=900, ge=60, le=3_600)
     model_manifest_user_hourly_limit: int = Field(default=3, ge=1, le=100)
     model_manifest_user_daily_limit: int = Field(default=8, ge=1, le=1_000)

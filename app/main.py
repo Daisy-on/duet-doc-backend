@@ -15,6 +15,7 @@ from app.database import create_database
 from app.providers.deepseek import DeepSeekProvider
 from app.schemas.ai import APIError, ErrorResponse
 from app.services.ai_dispatcher import AIDispatcher
+from app.services.media_storage import MediaStorage
 from app.services.model_delivery import create_model_delivery_service
 from app.services.model_manifest_manager import ModelManifestManager, PostgresModelGrantIssuer
 from app.services.rate_limit import InMemoryTokenBucket
@@ -41,6 +42,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         client = httpx.AsyncClient(timeout=timeout)
         provider = DeepSeekProvider(resolved_settings, client)
         app.state.ai_dispatcher = AIDispatcher(resolved_settings, provider)
+        app.state.media_storage = (
+            MediaStorage(resolved_settings)
+            if resolved_settings.oss_media_bucket and resolved_settings.oss_ecs_role_name
+            else None
+        )
         model_delivery = create_model_delivery_service(resolved_settings)
         app.state.model_manifest_manager = None
         engine = None

@@ -3,11 +3,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 import alibabacloud_oss_v2 as oss
-from alibabacloud_credentials.client import Client as CredentialClient
-from alibabacloud_credentials.models import Config as CredentialConfig
 
 from app.core.config import Settings
 from app.schemas.models import ModelManifest, ModelManifestFile
+from app.services.oss_client import create_oss_client
 
 
 class ModelNotFoundError(Exception):
@@ -81,30 +80,8 @@ class OSSObjectSigner:
         if not settings.oss_bucket or not settings.oss_ecs_role_name:
             raise ValueError("OSS model delivery is not configured")
 
-        credential_client = CredentialClient(
-            CredentialConfig(
-                type="ecs_ram_role",
-                role_name=settings.oss_ecs_role_name,
-                disable_imds_v1=True,
-            )
-        )
-
-        def load_credentials() -> oss.credentials.Credentials:
-            credential = credential_client.get_credential()
-            if not credential.access_key_id or not credential.access_key_secret:
-                raise ModelSigningError("ECS RAM role returned incomplete credentials")
-            return oss.credentials.Credentials(
-                access_key_id=credential.access_key_id,
-                access_key_secret=credential.access_key_secret,
-                security_token=credential.security_token,
-            )
-
-        config = oss.config.load_default()
-        config.credentials_provider = oss.credentials.CredentialsProviderFunc(load_credentials)
-        config.region = settings.oss_region
-        config.endpoint = settings.oss_endpoint
         self._bucket = settings.oss_bucket
-        self._client = oss.Client(config)
+        self._client = create_oss_client(settings)
 
     def sign_get_object(self, object_key: str, expiration: datetime) -> str:
         try:
