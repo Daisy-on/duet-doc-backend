@@ -46,7 +46,7 @@ async def storage_call[T](operation: Callable[[], T]) -> T:
         raise HTTPException(502, "Media storage request failed") from exc
 
 
-async def load_asset(session, workspace_id: UUID, asset_id: UUID):
+async def load_asset(session, workspace_id: UUID, asset_id: str):
     row = (
         (
             await session.execute(
@@ -124,7 +124,7 @@ async def request_upload(
 @router.post("/{asset_id}/complete", response_model=MediaState)
 async def complete_upload(
     workspace_id: UUID,
-    asset_id: UUID,
+    asset_id: str,
     user: AuthenticatedUser,
     session: DatabaseSession,
     storage: Storage,
@@ -155,7 +155,7 @@ async def complete_upload(
 @router.get("/{asset_id}/access", response_model=MediaAccess)
 async def get_access(
     workspace_id: UUID,
-    asset_id: UUID,
+    asset_id: str,
     request: Request,
     user: AuthenticatedUser,
     session: DatabaseSession,

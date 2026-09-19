@@ -90,7 +90,7 @@ async def media_client():
 
 def upload_body():
     return {
-        "asset_id": str(uuid4()),
+        "asset_id": f"asset-{uuid4().hex[:12]}",
         "content_type": "image/png",
         "size_bytes": 68,
         "md5_hex": "a" * 32,
