@@ -51,3 +51,6 @@ class MediaStorage:
         if not result.url:
             raise ValueError("OSS returned an empty read URL")
         return result.url
+
+    def delete(self, key: str) -> None:
+        self.client.delete_object(oss.DeleteObjectRequest(bucket=self.bucket, key=key))

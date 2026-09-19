@@ -1,4 +1,5 @@
 import asyncio
+import json
 from uuid import uuid4
 
 import httpx
@@ -66,18 +67,18 @@ def kb(entity_id="kb", revision=0):
     }
 
 
-def document():
+def document(entity_id="doc", revision=0, content="hello", content_format="html"):
     return {
         "entity_type": "document",
-        "entity_id": "doc",
+        "entity_id": entity_id,
         "operation": "upsert",
-        "base_revision": 0,
+        "base_revision": revision,
         "data": {
             "kb_id": "kb",
             "group_id": None,
             "title": "Note",
-            "content": "hello",
-            "content_format": "html",
+            "content": content,
+            "content_format": content_format,
             "created_at": "2026-09-05T00:00:00Z",
         },
     }
@@ -128,6 +129,23 @@ def chat_message(status="complete"):
 
 def mutation(wid, operations):
     return {"workspace_id": wid, "mutation_id": str(uuid4()), "operations": operations}
+
+
+async def insert_ready_asset(session, wid, asset_id):
+    await session.execute(
+        text(
+            "INSERT INTO media_assets "
+            "(workspace_id,asset_id,object_key,content_type,size_bytes,md5_hex,status,"
+            "ready_at,unreferenced_at) "
+            "VALUES (:wid,:asset_id,:key,'image/png',68,:md5,'ready',now(),now())"
+        ),
+        {
+            "wid": wid,
+            "asset_id": asset_id,
+            "key": f"tests/{uuid4()}.png",
+            "md5": "a" * 32,
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -290,6 +308,163 @@ async def test_delete_requires_complete_group_and_pagination(sync_client):
         if not page["has_more"]:
             break
     assert count == 2
+
+
+@pytest.mark.asyncio
+async def test_document_media_refs_follow_current_content(sync_client):
+    client, wid, _, session = sync_client
+    await insert_ready_asset(session, wid, "asset-first")
+    await insert_ready_asset(session, wid, "asset-second")
+    tiptap = json.dumps(
+        {
+            "type": "doc",
+            "content": [{"type": "image", "attrs": {"assetId": "asset-first"}}],
+        }
+    )
+
+    created = await client.post(
+        "/api/v1/sync/push",
+        json=mutation(wid, [kb(), document(content=tiptap, content_format="tiptap_json")]),
+    )
+    assert created.status_code == 200
+    assert (
+        await session.scalar(
+            text(
+                "SELECT count(*) FROM document_media_refs "
+                "WHERE workspace_id=:wid AND document_id='doc' AND asset_id='asset-first'"
+            ),
+            {"wid": wid},
+        )
+        == 1
+    )
+    assert await session.scalar(
+        text(
+            "SELECT unreferenced_at IS NULL FROM media_assets "
+            "WHERE workspace_id=:wid AND asset_id='asset-first'"
+        ),
+        {"wid": wid},
+    )
+
+    replaced = await client.post(
+        "/api/v1/sync/push",
+        json=mutation(
+            wid,
+            [
+                document(
+                    revision=1,
+                    content='<p>updated</p><img data-asset-id="asset-second">',
+                )
+            ],
+        ),
+    )
+    assert replaced.status_code == 200
+    refs = set(
+        await session.scalars(
+            text(
+                "SELECT asset_id FROM document_media_refs "
+                "WHERE workspace_id=:wid AND document_id='doc'"
+            ),
+            {"wid": wid},
+        )
+    )
+    assert refs == {"asset-second"}
+    states = dict(
+        (
+            await session.execute(
+                text(
+                    "SELECT asset_id,unreferenced_at IS NULL AS referenced "
+                    "FROM media_assets WHERE workspace_id=:wid"
+                ),
+                {"wid": wid},
+            )
+        ).all()
+    )
+    assert states == {"asset-first": False, "asset-second": True}
+
+    restored = await client.post(
+        "/api/v1/sync/push",
+        json=mutation(wid, [document(revision=2, content=tiptap, content_format="tiptap_json")]),
+    )
+    assert restored.status_code == 200
+    assert await session.scalar(
+        text(
+            "SELECT unreferenced_at IS NULL FROM media_assets "
+            "WHERE workspace_id=:wid AND asset_id='asset-first'"
+        ),
+        {"wid": wid},
+    )
+
+
+@pytest.mark.asyncio
+async def test_shared_media_and_unavailable_media_are_safe(sync_client):
+    client, wid, _, session = sync_client
+    await insert_ready_asset(session, wid, "asset-shared")
+    image = '<img data-asset-id="asset-shared">'
+    created = await client.post(
+        "/api/v1/sync/push",
+        json=mutation(
+            wid, [kb(), document("doc-a", content=image), document("doc-b", content=image)]
+        ),
+    )
+    assert created.status_code == 200
+
+    removed_from_one = await client.post(
+        "/api/v1/sync/push",
+        json=mutation(wid, [document("doc-a", revision=1)]),
+    )
+    assert removed_from_one.status_code == 200
+    assert await session.scalar(
+        text(
+            "SELECT unreferenced_at IS NULL FROM media_assets "
+            "WHERE workspace_id=:wid AND asset_id='asset-shared'"
+        ),
+        {"wid": wid},
+    )
+
+    deleted = await client.post(
+        "/api/v1/sync/push",
+        json=mutation(
+            wid,
+            [
+                {
+                    "entity_type": "document",
+                    "entity_id": "doc-b",
+                    "operation": "delete",
+                    "base_revision": 1,
+                }
+            ],
+        ),
+    )
+    assert deleted.status_code == 200
+    assert await session.scalar(
+        text(
+            "SELECT unreferenced_at IS NOT NULL FROM media_assets "
+            "WHERE workspace_id=:wid AND asset_id='asset-shared'"
+        ),
+        {"wid": wid},
+    )
+
+    unavailable = await client.post(
+        "/api/v1/sync/push",
+        json=mutation(
+            wid,
+            [kb("kb-rollback"), document("doc-missing", content='<img data-asset-id="missing">')],
+        ),
+    )
+    assert unavailable.status_code == 409
+    assert unavailable.json()["detail"] == {
+        "code": "MEDIA_NOT_READY",
+        "asset_ids": ["missing"],
+    }
+    assert (
+        await session.scalar(
+            text(
+                "SELECT count(*) FROM knowledge_bases WHERE workspace_id=:wid AND id='kb-rollback'"
+            ),
+            {"wid": wid},
+        )
+        == 0
+    )
 
 
 @pytest.mark.asyncio

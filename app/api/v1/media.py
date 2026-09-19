@@ -143,7 +143,7 @@ async def complete_upload(
             )
         await session.execute(
             text(
-                "UPDATE media_assets SET status='ready',ready_at=now() "
+                "UPDATE media_assets SET status='ready',ready_at=now(),unreferenced_at=now() "
                 "WHERE workspace_id=:wid AND asset_id=:aid AND status='pending'"
             ),
             {"wid": workspace_id, "aid": asset_id},

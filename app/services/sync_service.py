@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.sync import DATA_MODELS, PushRequest
+from app.services.media_references import extract_document_asset_ids, replace_document_media_refs
 
 TABLES = {
     "knowledge_base": "knowledge_bases",
@@ -174,6 +175,8 @@ async def push(session: AsyncSession, user_id, request: PushRequest):
                     ),
                     params,
                 )
+            elif operation.entity_type == "document":
+                await replace_document_media_refs(session, wid, operation.entity_id, set())
         else:
             data = DATA_MODELS[operation.entity_type].model_validate(operation.data).model_dump()
             columns = list(data)
@@ -198,6 +201,9 @@ async def push(session: AsyncSession, user_id, request: PushRequest):
                 ),
                 params,
             )
+            if operation.entity_type == "document":
+                asset_ids = extract_document_asset_ids(data["content"], data["content_format"])
+                await replace_document_media_refs(session, wid, operation.entity_id, asset_ids)
         sequence += 1
         snapshot = (
             (

@@ -59,7 +59,7 @@ docker compose -f compose.server.yaml exec api alembic current
 最后一条命令应输出：
 
 ```text
-0007 (head)
+0008 (head)
 ```
 
 再确认服务状态：
@@ -103,7 +103,7 @@ docker compose -f compose.server.yaml exec api python -m app.media_smoke
 也不会写入业务数据库。如果失败，只会提示异常类型，不会打印签名 URL 或临时凭据。
 失败时检查服务器 `.env` 中的 `OSS_MEDIA_BUCKET`、角色名和 RAM 策略资源路径。
 
-这项测试不经过浏览器，因此不验证 CORS。下一批前端使用浏览器 PUT 上传时再验证跨域设置。
+这项测试不经过浏览器，因此不验证 CORS。跨域设置应通过前端浏览器 PUT 上传单独验证。
 
 ## 接口约定
 
@@ -157,7 +157,8 @@ OSS 层强制的上传字节配额。单次 PUT、无分片上传是当前接口
 - 插图后立即删除或撤销，在首次同步前已无引用的图片不申请上传。
 - 上传期间继续编辑进入下一次变更，上传完成不得用旧快照覆盖当前编辑器。
 - 上传途中取消可能留下 pending 或未引用 ready 资源，本批不自动清理，也不提供删除接口。
-- `document_media_refs` 为垃圾回收预留，当前不填充，也不据此删除对象。
+- 文档同步事务会用当前正文中的 `assetId` 替换 `document_media_refs`；缺失、未完成或正在回收的资源会阻止正文提交。
+- 零引用资源只记录 `unreferenced_at`，当前不会自动删除数据库记录或 OSS 对象。
 - 本地 Blob、旧图片引用、历史版本均保留；不要通过正文引用表为空判断图片可删除。
 
 ## 浏览器手动验证
@@ -167,5 +168,40 @@ OSS 层强制的上传字节配额。单次 PUT、无分片上传是当前接口
 3. 插入图片后立即撤销或删除，再点击同步。该图片不应出现在 OSS 的业务目录中。
 4. 断开后端后点击同步，应显示失败；恢复后再次同步应成功，正文与图片均不丢失。
 
-前端接入前必须先在服务器执行 `alembic upgrade head` 并确认版本为 `0007`。
+前端接入前必须先在服务器执行 `alembic upgrade head` 并确认版本为 `0008`。
 `0007` 将媒体资源 ID 从 UUID 改为受格式约束的文本，以兼容已有客户端生成的 `asset-*` 标识。
+`0008` 增加媒体引用生命周期字段。云端引用表只表达当前文档状态；本地历史版本继续依靠 IndexedDB Blob 恢复，
+恢复后可用原 `assetId` 重新上传。迁移前已经存在但尚未经过文档同步的资源保持未标记状态，避免未来 GC 误删旧数据。
+
+## 垃圾回收命令
+
+垃圾回收只通过服务器命令运行，不提供 HTTP 接口。第一次必须先预览候选：
+
+```bash
+docker compose -f compose.server.yaml exec api python -m app.media_gc --dry-run
+```
+
+默认规则如下：
+
+- `ready` 且连续 7 天没有当前文档引用的资源进入候选。
+- `pending` 且创建超过 24 小时的资源进入候选。
+- 上次删除失败而停留在 `deleting` 的资源优先重试。
+- `unreferenced_at` 为空的迁移前资源不会进入候选。
+- 单次最多处理 100 条，可通过 `--limit` 调整，最大 1000。
+
+确认预览中的资源确实可以删除后，再显式执行：
+
+```bash
+docker compose -f compose.server.yaml exec api python -m app.media_gc --execute
+```
+
+也可以调整宽限期和批量大小：
+
+```bash
+docker compose -f compose.server.yaml exec api \
+  python -m app.media_gc --dry-run --ready-days 14 --pending-hours 48 --limit 200
+```
+
+执行时先将数据库记录标记为 `deleting`，再删除 OSS 对象，最后删除数据库记录。
+OSS 删除失败时记录保留为 `deleting`，下次执行会重试；同步服务不会让正文引用正在删除的资源。
+如果候选数量等于 `limit`，应重复运行，直到 `--dry-run` 显示 0 个候选。
