@@ -31,10 +31,10 @@ git pull --ff-only
 ### 2. 修改服务器环境变量
 
 在 1Panel 文件管理器中打开 `/opt/duet-doc-backend/.env`，或在服务器终端使用编辑器，
-增加以下配置。`daisy-duet-media` 要替换为你实际创建的图片 Bucket 名称：
+增加以下配置。将 `<your-private-media-bucket>` 替换为自己创建的图片 Bucket 名称：
 
 ```dotenv
-OSS_MEDIA_BUCKET=daisy-duet-media
+OSS_MEDIA_BUCKET=<your-private-media-bucket>
 MEDIA_MAX_SIZE_BYTES=10485760
 MEDIA_URL_TTL_SECONDS=900
 ```
