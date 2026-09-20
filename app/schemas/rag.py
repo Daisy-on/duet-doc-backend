@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+MAX_TEXT_INDEX_CHUNKS = 2_000
+
 
 class RagModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -33,7 +35,7 @@ class TextIndexUpload(RagModel):
     embedding_model: Literal["multilingual-e5-base"]
     embedding_dimension: Literal[768]
     chunker_version: Literal["v2"]
-    chunks: list[TextIndexChunk] = Field(max_length=500)
+    chunks: list[TextIndexChunk] = Field(max_length=MAX_TEXT_INDEX_CHUNKS)
 
     @model_validator(mode="after")
     def validate_chunks(self):
