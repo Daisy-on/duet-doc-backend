@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,6 +31,16 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_fast_model: str = "deepseek-v4-flash"
     deepseek_quality_model: str = "deepseek-v4-pro"
+
+    dashscope_api_key: SecretStr | None = None
+    rag_embedding_base_url: str = (
+        "https://dashscope.aliyuncs.com/api/v1/services/embeddings/"
+        "multimodal-embedding/multimodal-embedding"
+    )
+    rag_embedding_model: str = "qwen3-vl-embedding"
+    rag_embedding_dimension: Literal[768] = 768
+    rag_worker_poll_seconds: float = Field(default=2, ge=0.2, le=60)
+    rag_worker_max_attempts: int = Field(default=3, ge=1, le=10)
 
     ai_connect_timeout_seconds: float = 10
     ai_read_timeout_seconds: float = 120

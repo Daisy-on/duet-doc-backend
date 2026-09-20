@@ -179,8 +179,14 @@ async def push(session: AsyncSession, user_id, request: PushRequest):
                 await replace_document_media_refs(session, wid, operation.entity_id, set())
                 await session.execute(
                     text(
-                        "DELETE FROM rag_source_indexes "
-                        "WHERE workspace_id=:wid AND source_id=:id"
+                        "DELETE FROM rag_source_indexes WHERE workspace_id=:wid AND source_id=:id"
+                    ),
+                    params,
+                )
+                await session.execute(
+                    text(
+                        "DELETE FROM rag_cloud_source_indexes "
+                        "WHERE workspace_id=:wid AND modality='text' AND source_id=:id"
                     ),
                     params,
                 )
@@ -224,6 +230,13 @@ async def push(session: AsyncSession, user_id, request: PushRequest):
                         "THEN 'stale' ELSE 'pending' END,updated_at=now()"
                     ),
                     {**params, "source_type": source_type},
+                )
+                await session.execute(
+                    text(
+                        "UPDATE rag_cloud_source_indexes SET status='stale',updated_at=now() "
+                        "WHERE workspace_id=:wid AND modality='text' AND source_id=:id"
+                    ),
+                    params,
                 )
         sequence += 1
         snapshot = (

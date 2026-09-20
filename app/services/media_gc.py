@@ -134,6 +134,13 @@ async def run_media_gc(
             continue
 
         async with sessions() as session, session.begin():
+            await session.execute(
+                text(
+                    "DELETE FROM rag_cloud_source_indexes "
+                    "WHERE workspace_id=:wid AND modality='image' AND source_id=:aid"
+                ),
+                {"wid": candidate.workspace_id, "aid": candidate.asset_id},
+            )
             removed = await session.scalar(
                 text(
                     "DELETE FROM media_assets AS asset "
