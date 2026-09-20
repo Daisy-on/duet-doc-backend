@@ -131,6 +131,26 @@ def mutation(wid, operations):
     return {"workspace_id": wid, "mutation_id": str(uuid4()), "operations": operations}
 
 
+def text_index(revision=1, fingerprint="fingerprint-v1"):
+    return {
+        "source_revision": revision,
+        "source_fingerprint": fingerprint,
+        "embedding_model": "multilingual-e5-base",
+        "embedding_dimension": 768,
+        "chunker_version": "v2",
+        "chunks": [
+            {
+                "id": f"chunk-{revision}",
+                "chunk_index": 0,
+                "heading_path": ["Section"],
+                "content": f"Indexed content revision {revision}",
+                "content_hash": f"hash-{revision}",
+                "embedding": [0.0] * 767 + [1.0],
+            }
+        ],
+    }
+
+
 async def insert_ready_asset(session, wid, asset_id):
     await session.execute(
         text(
@@ -197,6 +217,99 @@ async def test_sync_status_tracks_workspace_sequence(sync_client):
     current = await client.get("/api/v1/sync/status", params={"workspace_id": wid})
     assert current.status_code == 200
     assert current.json() == {"workspace_id": wid, "current_sequence": 1}
+
+
+@pytest.mark.asyncio
+async def test_client_text_index_lifecycle(sync_client):
+    client, wid, _, session = sync_client
+    created = await client.post(
+        "/api/v1/sync/push", json=mutation(wid, [document(), kb()])
+    )
+    assert created.status_code == 200
+
+    endpoint = f"/api/v1/rag/workspaces/{wid}/text-indexes/document/doc"
+    statuses = await client.get(f"/api/v1/rag/workspaces/{wid}/text-indexes")
+    assert statuses.status_code == 200
+    assert statuses.json()[0]["status"] == "pending"
+
+    uploaded = await client.put(endpoint, json=text_index())
+    assert uploaded.status_code == 200
+    assert uploaded.json() == {"source_id": "doc", "status": "ready", "chunk_count": 1}
+    assert await session.scalar(
+        text(
+            "SELECT vector_dims(embedding) FROM rag_text_chunks "
+            "WHERE workspace_id=:wid AND source_id='doc'"
+        ),
+        {"wid": wid},
+    ) == 768
+
+    repeated = await client.put(endpoint, json=text_index())
+    assert repeated.status_code == 200
+    assert await session.scalar(
+        text(
+            "SELECT count(*) FROM rag_text_chunks "
+            "WHERE workspace_id=:wid AND source_id='doc'"
+        ),
+        {"wid": wid},
+    ) == 1
+
+    changed = await client.post(
+        "/api/v1/sync/push",
+        json=mutation(wid, [document(revision=1, content="changed")]),
+    )
+    assert changed.status_code == 200
+    state = (
+        (
+            await session.execute(
+                text(
+                    "SELECT source_revision,status FROM rag_source_indexes "
+                    "WHERE workspace_id=:wid AND source_id='doc'"
+                ),
+                {"wid": wid},
+            )
+        )
+        .mappings()
+        .one()
+    )
+    assert dict(state) == {"source_revision": 2, "status": "stale"}
+    stale = await client.put(endpoint, json=text_index())
+    assert stale.status_code == 409
+    assert stale.json()["detail"] == {
+        "code": "SOURCE_REVISION_MISMATCH",
+        "current_revision": 2,
+    }
+
+    refreshed = await client.put(endpoint, json=text_index(2, "fingerprint-v2"))
+    assert refreshed.status_code == 200
+    deleted = await client.post(
+        "/api/v1/sync/push",
+        json=mutation(
+            wid,
+            [
+                {
+                    "entity_type": "document",
+                    "entity_id": "doc",
+                    "operation": "delete",
+                    "base_revision": 2,
+                }
+            ],
+        ),
+    )
+    assert deleted.status_code == 200
+    assert await session.scalar(
+        text(
+            "SELECT count(*) FROM rag_source_indexes "
+            "WHERE workspace_id=:wid AND source_id='doc'"
+        ),
+        {"wid": wid},
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_text_indexes_are_workspace_isolated(sync_client):
+    client, _, other_wid, _ = sync_client
+    response = await client.get(f"/api/v1/rag/workspaces/{other_wid}/text-indexes")
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
