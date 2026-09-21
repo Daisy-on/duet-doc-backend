@@ -1,5 +1,4 @@
 from functools import lru_cache
-from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -38,7 +37,7 @@ class Settings(BaseSettings):
         "multimodal-embedding/multimodal-embedding"
     )
     rag_embedding_model: str = "qwen3-vl-embedding"
-    rag_embedding_dimension: Literal[768] = 768
+    rag_embedding_dimension: int = Field(default=768, ge=1, le=4096)
     rag_worker_poll_seconds: float = Field(default=2, ge=0.2, le=60)
     rag_worker_max_attempts: int = Field(default=3, ge=1, le=10)
 

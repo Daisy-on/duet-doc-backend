@@ -238,6 +238,8 @@ async def fail_job(sessions, settings, job, exc):
 
 async def run() -> None:
     settings = Settings()
+    if settings.rag_embedding_dimension != 768:
+        raise ValueError("RAG_EMBEDDING_DIMENSION must be 768 for the current database schema")
     configure_logging(settings.app_env)
     engine, sessions = create_database(settings)
     async with sessions() as session:

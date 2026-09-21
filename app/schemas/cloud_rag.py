@@ -13,6 +13,8 @@ class CloudRagCoverage(BaseModel):
     has_client_index: bool
     has_cloud_index: bool
     has_any_index: bool
+    active_run_id: UUID | None
+    active_run_status: Literal["pending", "running"] | None
 
 
 class CloudRagPlan(BaseModel):

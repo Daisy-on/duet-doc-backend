@@ -93,6 +93,19 @@ async def cloud_rag_coverage(
             {"wid": workspace_id},
         )
     )
+    active_run = (
+        (
+            await session.execute(
+                text(
+                    "SELECT id,status FROM rag_index_runs WHERE workspace_id=:wid "
+                    "AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"wid": workspace_id},
+            )
+        )
+        .mappings()
+        .first()
+    )
     return CloudRagCoverage(
         current_sources=len(fingerprints),
         ready_sources=ready,
@@ -101,6 +114,8 @@ async def cloud_rag_coverage(
         has_client_index=has_client_index,
         has_cloud_index=ready > 0,
         has_any_index=has_client_index or ready > 0,
+        active_run_id=active_run["id"] if active_run else None,
+        active_run_status=active_run["status"] if active_run else None,
     )
 
 
