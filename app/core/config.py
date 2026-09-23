@@ -32,12 +32,10 @@ class Settings(BaseSettings):
     deepseek_quality_model: str = "deepseek-v4-pro"
 
     dashscope_api_key: SecretStr | None = None
-    rag_embedding_base_url: str = (
-        "https://dashscope.aliyuncs.com/api/v1/services/embeddings/"
-        "multimodal-embedding/multimodal-embedding"
-    )
-    rag_embedding_model: str = "qwen3-vl-embedding"
-    rag_embedding_dimension: int = Field(default=768, ge=1, le=4096)
+    siliconflow_api_key: SecretStr | None = None
+    rag_embedding_base_url: str = "https://api.siliconflow.cn/v1/embeddings"
+    rag_embedding_model: str = "BAAI/bge-large-zh-v1.5"
+    rag_embedding_dimension: int = Field(default=1024, ge=1, le=4096)
     rag_worker_poll_seconds: float = Field(default=2, ge=0.2, le=60)
     rag_worker_max_attempts: int = Field(default=3, ge=1, le=10)
 

@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-from datetime import UTC, datetime, timedelta
 
 import httpx
 from sqlalchemy import text
@@ -9,12 +8,11 @@ from sqlalchemy import text
 from app.core.config import Settings
 from app.core.logging import configure_logging
 from app.database import create_database
-from app.providers.dashscope_embedding import DashScopeEmbeddingProvider
+from app.providers.siliconflow_embedding import SiliconFlowEmbeddingProvider
 from app.services.cloud_rag_chunker import chunk_document, text_fingerprint
-from app.services.media_storage import MediaStorage
 
 logger = logging.getLogger(__name__)
-INDEX_VERSION = "cloud-v1"
+INDEX_VERSION = "bge-v1"
 
 
 async def claim_job(sessions):
@@ -51,39 +49,14 @@ async def claim_job(sessions):
 
 
 async def load_source(session, job):
-    if job["modality"] == "text":
-        row = (
-            (
-                await session.execute(
-                    text(
-                        "SELECT title,content,content_format,revision FROM documents "
-                        "WHERE workspace_id=:wid AND id=:sid AND deleted_at IS NULL"
-                    ),
-                    {"wid": job["workspace_id"], "sid": job["source_id"]},
-                )
-            )
-            .mappings()
-            .first()
-        )
-        if row is None or row["revision"] != job["source_revision"]:
-            return None
-        if (
-            text_fingerprint(row["title"], row["content"], row["content_format"])
-            != job["source_fingerprint"]
-        ):
-            return None
-        return dict(row)
+    if job["modality"] != "text":
+        raise ValueError("Image indexing requires the next multimodal RAG migration")
     row = (
         (
             await session.execute(
                 text(
-                    "SELECT asset.object_key,asset.md5_hex FROM media_assets asset "
-                    "WHERE asset.workspace_id=:wid AND asset.asset_id=:sid "
-                    "AND asset.status='ready' AND asset.gc_state='ready' "
-                    "AND EXISTS (SELECT 1 FROM document_media_refs ref JOIN documents doc "
-                    "ON doc.workspace_id=ref.workspace_id AND doc.id=ref.document_id "
-                    "WHERE ref.workspace_id=asset.workspace_id AND ref.asset_id=asset.asset_id "
-                    "AND doc.deleted_at IS NULL)"
+                    "SELECT title,content,content_format,revision FROM documents "
+                    "WHERE workspace_id=:wid AND id=:sid AND deleted_at IS NULL"
                 ),
                 {"wid": job["workspace_id"], "sid": job["source_id"]},
             )
@@ -91,12 +64,17 @@ async def load_source(session, job):
         .mappings()
         .first()
     )
-    if row is None or row["md5_hex"] != job["source_fingerprint"]:
+    if row is None or row["revision"] != job["source_revision"]:
+        return None
+    if (
+        text_fingerprint(row["title"], row["content"], row["content_format"])
+        != job["source_fingerprint"]
+    ):
         return None
     return dict(row)
 
 
-async def process_job(sessions, provider, storage, settings, job):
+async def process_job(sessions, provider, job):
     async with sessions() as session:
         source = await load_source(session, job)
         if source is None:
@@ -104,26 +82,18 @@ async def process_job(sessions, provider, storage, settings, job):
             await session.commit()
             return
         chunks = []
-        if job["modality"] == "text":
-            for chunk in chunk_document(
-                source["title"], source["content"], source["content_format"]
-            ):
-                cached = await session.scalar(
-                    text(
-                        "SELECT embedding::text FROM rag_cloud_chunks WHERE workspace_id=:wid "
-                        "AND modality='text' AND content_hash=:hash LIMIT 1"
-                    ),
-                    {"wid": job["workspace_id"], "hash": chunk.content_hash},
-                )
-                embedding = (
-                    json.loads(cached) if cached else await provider.embed_text(chunk.content)
-                )
-                chunks.append((chunk.index, chunk.content, chunk.content_hash, None, embedding))
-        else:
-            expires = datetime.now(UTC) + timedelta(seconds=settings.media_url_ttl_seconds)
-            url = await asyncio.to_thread(storage.sign_read, source["object_key"], expires)
-            embedding = await provider.embed_image(url)
-            chunks.append((0, None, job["source_fingerprint"], job["source_id"], embedding))
+        for chunk in chunk_document(
+            source["title"], source["content"], source["content_format"]
+        ):
+            cached = await session.scalar(
+                text(
+                    "SELECT embedding::text FROM rag_cloud_chunks WHERE workspace_id=:wid "
+                    "AND modality='text' AND content_hash=:hash LIMIT 1"
+                ),
+                {"wid": job["workspace_id"], "hash": chunk.content_hash},
+            )
+            embedding = json.loads(cached) if cached else await provider.embed_text(chunk.content)
+            chunks.append((chunk.index, chunk.content, chunk.content_hash, None, embedding))
         await session.execute(
             text(
                 "INSERT INTO rag_cloud_source_indexes "
@@ -238,8 +208,8 @@ async def fail_job(sessions, settings, job, exc):
 
 async def run() -> None:
     settings = Settings()
-    if settings.rag_embedding_dimension != 768:
-        raise ValueError("RAG_EMBEDDING_DIMENSION must be 768 for the current database schema")
+    if settings.rag_embedding_dimension != 1024:
+        raise ValueError("RAG_EMBEDDING_DIMENSION must be 1024 for the current database schema")
     configure_logging(settings.app_env)
     engine, sessions = create_database(settings)
     async with sessions() as session:
@@ -250,12 +220,11 @@ async def run() -> None:
             )
         )
         await session.commit()
-    storage = MediaStorage(settings)
     timeout = httpx.Timeout(
         settings.ai_read_timeout_seconds, connect=settings.ai_connect_timeout_seconds
     )
     async with httpx.AsyncClient(timeout=timeout) as client:
-        provider = DashScopeEmbeddingProvider(settings, client)
+        provider = SiliconFlowEmbeddingProvider(settings, client)
         try:
             while True:
                 job = await claim_job(sessions)
@@ -263,7 +232,7 @@ async def run() -> None:
                     await asyncio.sleep(settings.rag_worker_poll_seconds)
                     continue
                 try:
-                    await process_job(sessions, provider, storage, settings, job)
+                    await process_job(sessions, provider, job)
                 except Exception as exc:
                     logger.exception("Cloud RAG job failed: %s", job["id"])
                     await fail_job(sessions, settings, job, exc)

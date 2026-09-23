@@ -135,8 +135,8 @@ def text_index(revision=1, fingerprint="fingerprint-v1"):
     return {
         "source_revision": revision,
         "source_fingerprint": fingerprint,
-        "embedding_model": "multilingual-e5-base",
-        "embedding_dimension": 768,
+        "embedding_model": "bge-large-zh-v1.5",
+        "embedding_dimension": 1024,
         "chunker_version": "v2",
         "chunks": [
             {
@@ -145,7 +145,7 @@ def text_index(revision=1, fingerprint="fingerprint-v1"):
                 "heading_path": ["Section"],
                 "content": f"Indexed content revision {revision}",
                 "content_hash": f"hash-{revision}",
-                "embedding": [0.0] * 767 + [1.0],
+                "embedding": [0.0] * 1023 + [1.0],
             }
         ],
     }
@@ -241,7 +241,7 @@ async def test_client_text_index_lifecycle(sync_client):
             "WHERE workspace_id=:wid AND source_id='doc'"
         ),
         {"wid": wid},
-    ) == 768
+    ) == 1024
 
     repeated = await client.put(endpoint, json=text_index())
     assert repeated.status_code == 200

@@ -67,20 +67,6 @@ MODEL_CATALOG = {
             ModelFileSpec("onnx/model_q4f16.onnx", 215_407_355),
         ),
     ),
-    "multilingual-e5-base-fp16": ModelSpec(
-        model_id="multilingual-e5-base-fp16",
-        directory="multilingual-e5-base",
-        version="v1",
-        precision="fp16",
-        files=(
-            ModelFileSpec("config.json", 656),
-            ModelFileSpec("configuration.json", 77),
-            ModelFileSpec("special_tokens_map.json", 964),
-            ModelFileSpec("tokenizer_config.json", 1_177),
-            ModelFileSpec("tokenizer.json", 17_082_734),
-            ModelFileSpec("onnx/model_fp16.onnx", 555_234_024),
-        ),
-    ),
     "qwen3.5-0.8b-opt-q4f16": ModelSpec(
         model_id="qwen3.5-0.8b-opt-q4f16",
         directory="qwen3.5-0.8b-opt",

@@ -67,7 +67,7 @@ def test_model_manifest_requires_authentication() -> None:
     app.dependency_overrides[get_model_manifest_manager] = FakeModelManifestManager
 
     with TestClient(app) as client:
-        response = client.get("/api/v1/models/multilingual-e5-base-fp16/manifest")
+        response = client.get("/api/v1/models/bge-large-zh-v1.5-fp16/manifest")
 
     assert response.status_code == 401
 
@@ -119,8 +119,8 @@ def test_model_manifest_limits_repeated_requests_by_ip() -> None:
     app.dependency_overrides[get_model_manifest_manager] = FakeModelManifestManager
 
     with TestClient(app) as client:
-        first = client.get("/api/v1/models/multilingual-e5-base-fp16/manifest")
-        limited = client.get("/api/v1/models/multilingual-e5-base-fp16/manifest")
+        first = client.get("/api/v1/models/bge-large-zh-v1.5-fp16/manifest")
+        limited = client.get("/api/v1/models/bge-large-zh-v1.5-fp16/manifest")
 
     assert first.status_code == 200
     assert limited.status_code == 429

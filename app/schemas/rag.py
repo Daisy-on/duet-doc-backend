@@ -18,7 +18,7 @@ class TextIndexChunk(RagModel):
     heading_path: list[str] = Field(default_factory=list, max_length=20)
     content: str = Field(min_length=1, max_length=50_000)
     content_hash: str = Field(min_length=1, max_length=128)
-    embedding: list[float] = Field(min_length=768, max_length=768)
+    embedding: list[float] = Field(min_length=1024, max_length=1024)
 
     @model_validator(mode="after")
     def validate_values(self):
@@ -32,8 +32,8 @@ class TextIndexChunk(RagModel):
 class TextIndexUpload(RagModel):
     source_revision: int = Field(gt=0)
     source_fingerprint: str = Field(min_length=1, max_length=128)
-    embedding_model: Literal["multilingual-e5-base"]
-    embedding_dimension: Literal[768]
+    embedding_model: Literal["bge-large-zh-v1.5"]
+    embedding_dimension: Literal[1024]
     chunker_version: Literal["v2"]
     chunks: list[TextIndexChunk] = Field(max_length=MAX_TEXT_INDEX_CHUNKS)
 

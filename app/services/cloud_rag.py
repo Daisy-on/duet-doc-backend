@@ -13,9 +13,13 @@ from app.services.cloud_rag_chunker import chunk_document, text_fingerprint
 from app.services.rag_text_indexes import source_type_for_kb
 from app.services.sync_service import workspace_for_user
 
+EMBEDDING_MODEL = "BAAI/bge-large-zh-v1.5"
+EMBEDDING_DIMENSION = 1024
+INDEX_VERSION = "bge-v1"
+
 
 async def _current_sources(session: AsyncSession, workspace_id: UUID):
-    documents = (
+    return (
         (
             await session.execute(
                 text(
@@ -28,17 +32,17 @@ async def _current_sources(session: AsyncSession, workspace_id: UUID):
         .mappings()
         .all()
     )
-    images = (
+
+
+async def _client_indexed_revisions(session: AsyncSession, workspace_id: UUID):
+    rows = (
         (
             await session.execute(
                 text(
-                    "SELECT DISTINCT asset.asset_id,asset.md5_hex,asset.object_key "
-                    "FROM media_assets asset JOIN document_media_refs ref "
-                    "ON ref.workspace_id=asset.workspace_id AND ref.asset_id=asset.asset_id "
-                    "JOIN documents doc ON doc.workspace_id=ref.workspace_id "
-                    "AND doc.id=ref.document_id "
-                    "WHERE asset.workspace_id=:wid AND asset.status='ready' "
-                    "AND asset.gc_state='ready' AND doc.deleted_at IS NULL ORDER BY asset.asset_id"
+                    "SELECT source_id,source_revision FROM rag_source_indexes "
+                    "WHERE workspace_id=:wid AND status='ready' "
+                    "AND embedding_model='bge-large-zh-v1.5' AND embedding_dimension=1024 "
+                    "AND chunker_version='v2'"
                 ),
                 {"wid": workspace_id},
             )
@@ -46,24 +50,24 @@ async def _current_sources(session: AsyncSession, workspace_id: UUID):
         .mappings()
         .all()
     )
-    return documents, images
+    return {row["source_id"]: row["source_revision"] for row in rows}
 
 
 async def cloud_rag_coverage(
     session: AsyncSession, user_id: UUID, workspace_id: UUID
 ) -> CloudRagCoverage:
     await workspace_for_user(session, workspace_id, user_id)
-    documents, images = await _current_sources(session, workspace_id)
+    documents = await _current_sources(session, workspace_id)
     fingerprints = {
         ("text", row["id"]): text_fingerprint(row["title"], row["content"], row["content_format"])
         for row in documents
     }
-    fingerprints.update({("image", row["asset_id"]): row["md5_hex"] for row in images})
     rows = (
         (
             await session.execute(
                 text(
-                    "SELECT modality,source_id,source_fingerprint,status "
+                    "SELECT modality,source_id,source_fingerprint,status,embedding_model,"
+                    "embedding_dimension,index_version "
                     "FROM rag_cloud_source_indexes WHERE workspace_id=:wid"
                 ),
                 {"wid": workspace_id},
@@ -79,6 +83,9 @@ async def cloud_rag_coverage(
         if (row := indexes.get(key))
         and row["status"] == "ready"
         and row["source_fingerprint"] == fingerprint
+        and row["embedding_model"] == EMBEDDING_MODEL
+        and row["embedding_dimension"] == EMBEDDING_DIMENSION
+        and row["index_version"] == INDEX_VERSION
     )
     stale = sum(1 for key in fingerprints if key in indexes) - ready
     missing = len(fingerprints) - ready - stale
@@ -88,6 +95,8 @@ async def cloud_rag_coverage(
                 "SELECT EXISTS (SELECT 1 FROM rag_source_indexes idx JOIN documents doc "
                 "ON doc.workspace_id=idx.workspace_id AND doc.id=idx.source_id "
                 "WHERE idx.workspace_id=:wid AND idx.status='ready' "
+                "AND idx.embedding_model='bge-large-zh-v1.5' "
+                "AND idx.embedding_dimension=1024 "
                 "AND idx.source_revision=doc.revision AND doc.deleted_at IS NULL)"
             ),
             {"wid": workspace_id},
@@ -121,12 +130,13 @@ async def cloud_rag_coverage(
 
 async def cloud_rag_plan(session: AsyncSession, user_id: UUID, workspace_id: UUID) -> CloudRagPlan:
     await workspace_for_user(session, workspace_id, user_id)
-    documents, images = await _current_sources(session, workspace_id)
+    documents = await _current_sources(session, workspace_id)
     existing_rows = (
         (
             await session.execute(
                 text(
-                    "SELECT modality,source_id,source_fingerprint,status "
+                    "SELECT modality,source_id,source_fingerprint,status,embedding_model,"
+                    "embedding_dimension,index_version "
                     "FROM rag_cloud_source_indexes WHERE workspace_id=:wid"
                 ),
                 {"wid": workspace_id},
@@ -136,15 +146,21 @@ async def cloud_rag_plan(session: AsyncSession, user_id: UUID, workspace_id: UUI
         .all()
     )
     existing = {(row["modality"], row["source_id"]): row for row in existing_rows}
+    client_revisions = await _client_indexed_revisions(session, workspace_id)
     selected_documents = []
     chunk_count = character_count = 0
     for row in documents:
+        if client_revisions.get(row["id"]) == row["revision"]:
+            continue
         fingerprint = text_fingerprint(row["title"], row["content"], row["content_format"])
         current = existing.get(("text", row["id"]))
         if (
             current
             and current["status"] == "ready"
             and current["source_fingerprint"] == fingerprint
+            and current["embedding_model"] == EMBEDDING_MODEL
+            and current["embedding_dimension"] == EMBEDDING_DIMENSION
+            and current["index_version"] == INDEX_VERSION
         ):
             continue
         chunks = chunk_document(row["title"], row["content"], row["content_format"])
@@ -153,21 +169,12 @@ async def cloud_rag_plan(session: AsyncSession, user_id: UUID, workspace_id: UUI
         selected_documents.append(row)
         chunk_count += len(chunks)
         character_count += sum(len(chunk.content) for chunk in chunks)
-    selected_images = [
-        row
-        for row in images
-        if not (
-            (current := existing.get(("image", row["asset_id"])))
-            and current["status"] == "ready"
-            and current["source_fingerprint"] == row["md5_hex"]
-        )
-    ]
     return CloudRagPlan(
         document_count=len(selected_documents),
         text_chunk_count=chunk_count,
         text_character_count=character_count,
-        image_count=len(selected_images),
-        total_jobs=len(selected_documents) + len(selected_images),
+        image_count=0,
+        total_jobs=len(selected_documents),
     )
 
 
@@ -193,7 +200,7 @@ async def create_cloud_rag_run(
         return CloudRagRunCreated(
             run_id=active["id"], status=active["status"], total_jobs=active["total_jobs"]
         )
-    documents, images = await _current_sources(session, workspace_id)
+    documents = await _current_sources(session, workspace_id)
     plan = await cloud_rag_plan(session, user_id, workspace_id)
     run_id = uuid4()
     status = "pending" if plan.total_jobs else "completed"
@@ -215,7 +222,8 @@ async def create_cloud_rag_run(
         (
             await session.execute(
                 text(
-                    "SELECT modality,source_id,source_fingerprint,status "
+                    "SELECT modality,source_id,source_fingerprint,status,embedding_model,"
+                    "embedding_dimension,index_version "
                     "FROM rag_cloud_source_indexes WHERE workspace_id=:wid"
                 ),
                 {"wid": workspace_id},
@@ -225,14 +233,20 @@ async def create_cloud_rag_run(
         .all()
     )
     existing = {(row["modality"], row["source_id"]): row for row in existing_rows}
+    client_revisions = await _client_indexed_revisions(session, workspace_id)
     jobs = []
     for row in documents:
+        if client_revisions.get(row["id"]) == row["revision"]:
+            continue
         fingerprint = text_fingerprint(row["title"], row["content"], row["content_format"])
         current = existing.get(("text", row["id"]))
         if (
             current
             and current["status"] == "ready"
             and current["source_fingerprint"] == fingerprint
+            and current["embedding_model"] == EMBEDDING_MODEL
+            and current["embedding_dimension"] == EMBEDDING_DIMENSION
+            and current["index_version"] == INDEX_VERSION
         ):
             continue
         if not chunk_document(row["title"], row["content"], row["content_format"]):
@@ -240,15 +254,6 @@ async def create_cloud_rag_run(
         jobs.append(
             ("text", source_type_for_kb(row["kb_id"]), row["id"], row["revision"], fingerprint)
         )
-    for row in images:
-        current = existing.get(("image", row["asset_id"]))
-        if (
-            current
-            and current["status"] == "ready"
-            and current["source_fingerprint"] == row["md5_hex"]
-        ):
-            continue
-        jobs.append(("image", "image", row["asset_id"], None, row["md5_hex"]))
     for modality, source_type, source_id, revision, fingerprint in jobs:
         await session.execute(
             text(
