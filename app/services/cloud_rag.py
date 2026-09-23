@@ -16,6 +16,7 @@ from app.services.sync_service import workspace_for_user
 EMBEDDING_MODEL = "BAAI/bge-large-zh-v1.5"
 EMBEDDING_DIMENSION = 1024
 INDEX_VERSION = "bge-v1"
+IMAGE_INDEX_VERSION = "bge-v1:qwen3-vl-flash"
 
 
 async def _current_sources(session: AsyncSession, workspace_id: UUID):
@@ -31,6 +32,40 @@ async def _current_sources(session: AsyncSession, workspace_id: UUID):
         )
         .mappings()
         .all()
+    )
+
+
+async def _current_images(session: AsyncSession, workspace_id: UUID):
+    return (
+        (
+            await session.execute(
+                text(
+                    "SELECT DISTINCT asset.asset_id,asset.md5_hex FROM media_assets asset "
+                    "JOIN document_media_refs ref ON ref.workspace_id=asset.workspace_id "
+                    "AND ref.asset_id=asset.asset_id "
+                    "JOIN documents doc ON doc.workspace_id=ref.workspace_id "
+                    "AND doc.id=ref.document_id "
+                    "WHERE asset.workspace_id=:wid AND asset.status='ready' "
+                    "AND asset.gc_state='ready' AND doc.deleted_at IS NULL "
+                    "ORDER BY asset.asset_id"
+                ),
+                {"wid": workspace_id},
+            )
+        )
+        .mappings()
+        .all()
+    )
+
+
+def _index_is_current(row, fingerprint: str, modality: str) -> bool:
+    return bool(
+        row
+        and row["status"] == "ready"
+        and row["source_fingerprint"] == fingerprint
+        and row["embedding_model"] == EMBEDDING_MODEL
+        and row["embedding_dimension"] == EMBEDDING_DIMENSION
+        and row["index_version"]
+        == (IMAGE_INDEX_VERSION if modality == "image" else INDEX_VERSION)
     )
 
 
@@ -62,6 +97,10 @@ async def cloud_rag_coverage(
         ("text", row["id"]): text_fingerprint(row["title"], row["content"], row["content_format"])
         for row in documents
     }
+    fingerprints.update({
+        ("image", row["asset_id"]): row["md5_hex"]
+        for row in await _current_images(session, workspace_id)
+    })
     rows = (
         (
             await session.execute(
@@ -80,12 +119,7 @@ async def cloud_rag_coverage(
     ready = sum(
         1
         for key, fingerprint in fingerprints.items()
-        if (row := indexes.get(key))
-        and row["status"] == "ready"
-        and row["source_fingerprint"] == fingerprint
-        and row["embedding_model"] == EMBEDDING_MODEL
-        and row["embedding_dimension"] == EMBEDDING_DIMENSION
-        and row["index_version"] == INDEX_VERSION
+        if _index_is_current(indexes.get(key), fingerprint, key[0])
     )
     stale = sum(1 for key in fingerprints if key in indexes) - ready
     missing = len(fingerprints) - ready - stale
@@ -120,6 +154,11 @@ async def cloud_rag_coverage(
         ready_sources=ready,
         stale_sources=stale,
         missing_sources=missing,
+        pending_images=sum(
+            1
+            for key, fingerprint in fingerprints.items()
+            if key[0] == "image" and not _index_is_current(indexes.get(key), fingerprint, "image")
+        ),
         has_client_index=has_client_index,
         has_cloud_index=ready > 0,
         has_any_index=has_client_index or ready > 0,
@@ -128,7 +167,13 @@ async def cloud_rag_coverage(
     )
 
 
-async def cloud_rag_plan(session: AsyncSession, user_id: UUID, workspace_id: UUID) -> CloudRagPlan:
+async def cloud_rag_plan(
+    session: AsyncSession,
+    user_id: UUID,
+    workspace_id: UUID,
+    include_text: bool = True,
+    include_images: bool = False,
+) -> CloudRagPlan:
     await workspace_for_user(session, workspace_id, user_id)
     documents = await _current_sources(session, workspace_id)
     existing_rows = (
@@ -149,19 +194,12 @@ async def cloud_rag_plan(session: AsyncSession, user_id: UUID, workspace_id: UUI
     client_revisions = await _client_indexed_revisions(session, workspace_id)
     selected_documents = []
     chunk_count = character_count = 0
-    for row in documents:
+    for row in documents if include_text else []:
         if client_revisions.get(row["id"]) == row["revision"]:
             continue
         fingerprint = text_fingerprint(row["title"], row["content"], row["content_format"])
         current = existing.get(("text", row["id"]))
-        if (
-            current
-            and current["status"] == "ready"
-            and current["source_fingerprint"] == fingerprint
-            and current["embedding_model"] == EMBEDDING_MODEL
-            and current["embedding_dimension"] == EMBEDDING_DIMENSION
-            and current["index_version"] == INDEX_VERSION
-        ):
+        if _index_is_current(current, fingerprint, "text"):
             continue
         chunks = chunk_document(row["title"], row["content"], row["content_format"])
         if not chunks:
@@ -169,17 +207,30 @@ async def cloud_rag_plan(session: AsyncSession, user_id: UUID, workspace_id: UUI
         selected_documents.append(row)
         chunk_count += len(chunks)
         character_count += sum(len(chunk.content) for chunk in chunks)
+    images = []
+    if include_images:
+        images = [
+            row
+            for row in await _current_images(session, workspace_id)
+            if not _index_is_current(
+                existing.get(("image", row["asset_id"])), row["md5_hex"], "image"
+            )
+        ]
     return CloudRagPlan(
         document_count=len(selected_documents),
         text_chunk_count=chunk_count,
         text_character_count=character_count,
-        image_count=0,
-        total_jobs=len(selected_documents),
+        image_count=len(images),
+        total_jobs=len(selected_documents) + len(images),
     )
 
 
 async def create_cloud_rag_run(
-    session: AsyncSession, user_id: UUID, workspace_id: UUID
+    session: AsyncSession,
+    user_id: UUID,
+    workspace_id: UUID,
+    include_text: bool = True,
+    include_images: bool = False,
 ) -> CloudRagRunCreated:
     await workspace_for_user(session, workspace_id, user_id, lock=True)
     active = (
@@ -201,7 +252,7 @@ async def create_cloud_rag_run(
             run_id=active["id"], status=active["status"], total_jobs=active["total_jobs"]
         )
     documents = await _current_sources(session, workspace_id)
-    plan = await cloud_rag_plan(session, user_id, workspace_id)
+    plan = await cloud_rag_plan(session, user_id, workspace_id, include_text, include_images)
     run_id = uuid4()
     status = "pending" if plan.total_jobs else "completed"
     await session.execute(
@@ -235,25 +286,25 @@ async def create_cloud_rag_run(
     existing = {(row["modality"], row["source_id"]): row for row in existing_rows}
     client_revisions = await _client_indexed_revisions(session, workspace_id)
     jobs = []
-    for row in documents:
+    for row in documents if include_text else []:
         if client_revisions.get(row["id"]) == row["revision"]:
             continue
         fingerprint = text_fingerprint(row["title"], row["content"], row["content_format"])
         current = existing.get(("text", row["id"]))
-        if (
-            current
-            and current["status"] == "ready"
-            and current["source_fingerprint"] == fingerprint
-            and current["embedding_model"] == EMBEDDING_MODEL
-            and current["embedding_dimension"] == EMBEDDING_DIMENSION
-            and current["index_version"] == INDEX_VERSION
-        ):
+        if _index_is_current(current, fingerprint, "text"):
             continue
         if not chunk_document(row["title"], row["content"], row["content_format"]):
             continue
         jobs.append(
             ("text", source_type_for_kb(row["kb_id"]), row["id"], row["revision"], fingerprint)
         )
+    if include_images:
+        for row in await _current_images(session, workspace_id):
+            if _index_is_current(
+                existing.get(("image", row["asset_id"])), row["md5_hex"], "image"
+            ):
+                continue
+            jobs.append(("image", "image", row["asset_id"], None, row["md5_hex"]))
     for modality, source_type, source_id, revision, fingerprint in jobs:
         await session.execute(
             text(

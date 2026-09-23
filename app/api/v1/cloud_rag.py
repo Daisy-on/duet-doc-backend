@@ -10,6 +10,7 @@ from app.schemas.cloud_rag import (
     CloudRagCoverage,
     CloudRagPlan,
     CloudRagRunCreated,
+    CloudRagRunRequest,
     CloudRagRunStatus,
 )
 from app.services.cloud_rag import (
@@ -29,13 +30,28 @@ async def coverage(workspace_id: UUID, current_user: AuthenticatedUser, session:
 
 
 @router.get("/plan", response_model=CloudRagPlan)
-async def plan(workspace_id: UUID, current_user: AuthenticatedUser, session: Session):
-    return await cloud_rag_plan(session, current_user.user_id, workspace_id)
+async def plan(
+    workspace_id: UUID,
+    current_user: AuthenticatedUser,
+    session: Session,
+    include_text: bool = True,
+    include_images: bool = False,
+):
+    return await cloud_rag_plan(
+        session, current_user.user_id, workspace_id, include_text, include_images
+    )
 
 
 @router.post("/runs", response_model=CloudRagRunCreated)
-async def create_run(workspace_id: UUID, current_user: AuthenticatedUser, session: Session):
-    return await create_cloud_rag_run(session, current_user.user_id, workspace_id)
+async def create_run(
+    workspace_id: UUID,
+    request: CloudRagRunRequest,
+    current_user: AuthenticatedUser,
+    session: Session,
+):
+    return await create_cloud_rag_run(
+        session, current_user.user_id, workspace_id, request.include_text, request.include_images
+    )
 
 
 @router.get("/runs/{run_id}", response_model=CloudRagRunStatus)

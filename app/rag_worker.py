@@ -1,6 +1,8 @@
 import asyncio
+import hashlib
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from sqlalchemy import text
@@ -8,11 +10,14 @@ from sqlalchemy import text
 from app.core.config import Settings
 from app.core.logging import configure_logging
 from app.database import create_database
+from app.providers.dashscope_vision import DashScopeVisionProvider
 from app.providers.siliconflow_embedding import SiliconFlowEmbeddingProvider
 from app.services.cloud_rag_chunker import chunk_document, text_fingerprint
+from app.services.media_storage import MediaStorage
 
 logger = logging.getLogger(__name__)
 INDEX_VERSION = "bge-v1"
+IMAGE_INDEX_VERSION = "bge-v1:qwen3-vl-flash"
 
 
 async def claim_job(sessions):
@@ -49,8 +54,26 @@ async def claim_job(sessions):
 
 
 async def load_source(session, job):
-    if job["modality"] != "text":
-        raise ValueError("Image indexing requires the next multimodal RAG migration")
+    if job["modality"] == "image":
+        row = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT asset.object_key,asset.md5_hex FROM media_assets asset "
+                        "WHERE asset.workspace_id=:wid AND asset.asset_id=:sid "
+                        "AND asset.status='ready' AND asset.gc_state='ready' "
+                        "AND EXISTS (SELECT 1 FROM document_media_refs ref "
+                        "JOIN documents doc ON doc.workspace_id=ref.workspace_id "
+                        "AND doc.id=ref.document_id WHERE ref.workspace_id=asset.workspace_id "
+                        "AND ref.asset_id=asset.asset_id AND doc.deleted_at IS NULL)"
+                    ),
+                    {"wid": job["workspace_id"], "sid": job["source_id"]},
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row and row["md5_hex"] == job["source_fingerprint"] else None
     row = (
         (
             await session.execute(
@@ -74,7 +97,7 @@ async def load_source(session, job):
     return dict(row)
 
 
-async def process_job(sessions, provider, job):
+async def process_job(sessions, provider, job, vision=None, media_storage=None, media_ttl=900):
     async with sessions() as session:
         source = await load_source(session, job)
         if source is None:
@@ -82,18 +105,44 @@ async def process_job(sessions, provider, job):
             await session.commit()
             return
         chunks = []
-        for chunk in chunk_document(
-            source["title"], source["content"], source["content_format"]
-        ):
-            cached = await session.scalar(
-                text(
-                    "SELECT embedding::text FROM rag_cloud_chunks WHERE workspace_id=:wid "
-                    "AND modality='text' AND content_hash=:hash LIMIT 1"
-                ),
-                {"wid": job["workspace_id"], "hash": chunk.content_hash},
+        index_version = INDEX_VERSION
+        if job["modality"] == "image":
+            if vision is None or media_storage is None:
+                raise ValueError("Image indexing is not configured")
+            image_url = media_storage.sign_read(
+                source["object_key"], datetime.now(UTC) + timedelta(seconds=media_ttl)
             )
-            embedding = json.loads(cached) if cached else await provider.embed_text(chunk.content)
-            chunks.append((chunk.index, chunk.content, chunk.content_hash, None, embedding))
+            description = await vision.describe_image(image_url)
+            embedding = await provider.embed_text(description)
+            chunks.append(
+                (
+                    0,
+                    description,
+                    hashlib.sha256(description.encode()).hexdigest(),
+                    job["source_id"],
+                    embedding,
+                )
+            )
+            index_version = IMAGE_INDEX_VERSION
+        else:
+            for chunk in chunk_document(
+                source["title"], source["content"], source["content_format"]
+            ):
+                cached = await session.scalar(
+                    text(
+                        "SELECT embedding::text FROM rag_cloud_chunks WHERE workspace_id=:wid "
+                        "AND modality='text' AND content_hash=:hash LIMIT 1"
+                    ),
+                    {"wid": job["workspace_id"], "hash": chunk.content_hash},
+                )
+                embedding = (
+                    json.loads(cached) if cached else await provider.embed_text(chunk.content)
+                )
+                chunks.append((chunk.index, chunk.content, chunk.content_hash, None, embedding))
+        if await load_source(session, job) is None:
+            await finish_job(session, job, "skipped")
+            await session.commit()
+            return
         await session.execute(
             text(
                 "INSERT INTO rag_cloud_source_indexes "
@@ -113,7 +162,7 @@ async def process_job(sessions, provider, job):
                 "sid": job["source_id"],
                 "model": provider.model,
                 "dimension": provider.dimension,
-                "version": INDEX_VERSION,
+                "version": index_version,
                 "count": len(chunks),
                 "revision": job["source_revision"],
                 "fingerprint": job["source_fingerprint"],
@@ -131,9 +180,9 @@ async def process_job(sessions, provider, job):
                 text(
                     "INSERT INTO rag_cloud_chunks "
                     "(workspace_id,modality,source_id,id,chunk_index,content,content_hash,"
-                    "asset_id,embedding) VALUES "
+                    "asset_id,metadata,embedding) VALUES "
                     "(:wid,:modality,:sid,:id,:idx,:content,:hash,:asset,"
-                    "CAST(:embedding AS vector))"
+                    "CAST(:metadata AS jsonb),CAST(:embedding AS vector))"
                 ),
                 {
                     "wid": job["workspace_id"],
@@ -144,6 +193,9 @@ async def process_job(sessions, provider, job):
                     "content": content,
                     "hash": content_hash,
                     "asset": asset_id,
+                    "metadata": json.dumps({"vision_model": vision.model})
+                    if asset_id and vision
+                    else "{}",
                     "embedding": "[" + ",".join(str(value) for value in embedding) + "]",
                 },
             )
@@ -232,7 +284,15 @@ async def run() -> None:
                     await asyncio.sleep(settings.rag_worker_poll_seconds)
                     continue
                 try:
-                    await process_job(sessions, provider, job)
+                    vision = (
+                        DashScopeVisionProvider(settings, client)
+                        if job["modality"] == "image"
+                        else None
+                    )
+                    media = MediaStorage(settings) if vision else None
+                    await process_job(
+                        sessions, provider, job, vision, media, settings.media_url_ttl_seconds
+                    )
                 except Exception as exc:
                     logger.exception("Cloud RAG job failed: %s", job["id"])
                     await fail_job(sessions, settings, job, exc)

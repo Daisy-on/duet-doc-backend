@@ -135,7 +135,7 @@ qwen3.5-0.8b-opt-q4f16
 ## 同步与存储边界
 
 - PostgreSQL 保存用户、工作空间、文档结构、正文、聊天、同步日志和媒体元数据。
-- pgvector 保存浏览器上传或用户确认后由云端生成的 BGE 文本向量；图片向量与统一回答检索待后续接入。
+- pgvector 保存浏览器上传或用户确认后由云端生成的 BGE 文本向量。图片处理需单独同意：`qwen3-vl-flash` 生成描述，再由 BGE 建立图片描述向量；统一回答检索待后续接入。
 - OSS 模型 Bucket 保存端侧模型文件，后端只为白名单对象签发短期读取 URL。
 - OSS 媒体 Bucket 保存文档图片，正文只保存稳定 `assetId`，不保存签名 URL。
 - `document_media_refs` 只表达当前文档引用；浏览器本地历史版本及 Blob 不由云端 GC 删除。
@@ -163,7 +163,7 @@ qwen3.5-0.8b-opt-q4f16
 DATABASE_URL=postgresql+asyncpg://duet_doc:<POSTGRES_PASSWORD>@postgres:5432/duet_doc
 ```
 
-升级到 Alembic `0011` 前先备份数据库并停止旧 `rag-worker`。该迁移会清空旧 E5/Qwen 文本及图片向量、索引任务，改为 1024 维；不会删除文档、原图或同步数据。服务器 `.env` 还需设置 `SILICONFLOW_API_KEY`、`RAG_EMBEDDING_MODEL=BAAI/bge-large-zh-v1.5`、`RAG_EMBEDDING_DIMENSION=1024` 及新的 `RAG_EMBEDDING_BASE_URL`。本批云端任务仅处理文本，图片索引留待多模态接入。
+升级到 Alembic `0011` 前先备份数据库并停止旧 `rag-worker`。该迁移会清空旧 E5/Qwen 文本及图片向量、索引任务，改为 1024 维；不会删除文档、原图或同步数据。服务器 `.env` 需设置 `SILICONFLOW_API_KEY`、`RAG_EMBEDDING_MODEL=BAAI/bge-large-zh-v1.5`、`RAG_EMBEDDING_DIMENSION=1024`，图片索引还需 `DASHSCOPE_API_KEY`、`OSS_MEDIA_BUCKET` 和已授权读取图片的 ECS RAM Role。可按 `.env.example` 设置 `RAG_VISION_BASE_URL` 与 `RAG_VISION_MODEL`。图片索引批次沿用现有表，无新增迁移；部署时需要重建 `api` 和 `rag-worker`。
 
 首次部署或服务器切换到 `main` 后执行：
 

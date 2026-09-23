@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     deepseek_quality_model: str = "deepseek-v4-pro"
 
     dashscope_api_key: SecretStr | None = None
+    rag_vision_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    rag_vision_model: str = "qwen3-vl-flash"
     siliconflow_api_key: SecretStr | None = None
     rag_embedding_base_url: str = "https://api.siliconflow.cn/v1/embeddings"
     rag_embedding_model: str = "BAAI/bge-large-zh-v1.5"

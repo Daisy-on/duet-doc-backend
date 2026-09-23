@@ -10,6 +10,7 @@ class CloudRagCoverage(BaseModel):
     ready_sources: int
     stale_sources: int
     missing_sources: int
+    pending_images: int
     has_client_index: bool
     has_cloud_index: bool
     has_any_index: bool
@@ -23,6 +24,11 @@ class CloudRagPlan(BaseModel):
     text_character_count: int
     image_count: int
     total_jobs: int
+
+
+class CloudRagRunRequest(BaseModel):
+    include_text: bool = True
+    include_images: bool = False
 
 
 class CloudRagRunCreated(BaseModel):
