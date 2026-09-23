@@ -34,28 +34,13 @@ def test_manifest_only_signs_catalogued_model_files() -> None:
     assert len({expiration for _, expiration in signer.calls}) == 1
 
 
-def test_bge_manifest_uses_q4f16_directory_and_files() -> None:
+def test_bge_q4f16_manifest_is_no_longer_available() -> None:
     signer = FakeSigner()
     service = ModelDeliveryService(signer=signer, ttl_seconds=900)
 
-    manifest = service.get_manifest("bge-large-zh-v1.5-q4f16")
-
-    assert manifest.precision == "q4f16"
-    assert manifest.total_size_bytes == 215_959_285
-    assert [file.path for file in manifest.files] == [
-        "config.json",
-        "configuration.json",
-        "quantize_config.json",
-        "README.md",
-        "special_tokens_map.json",
-        "tokenizer_config.json",
-        "tokenizer.json",
-        "vocab.txt",
-        "onnx/model_q4f16.onnx",
-    ]
-    assert [key for key, _ in signer.calls] == [
-        f"models/v1/bge-large-zh-v1.5-q4f16/{file.path}" for file in manifest.files
-    ]
+    with pytest.raises(ModelNotFoundError):
+        service.get_manifest("bge-large-zh-v1.5-q4f16")
+    assert signer.calls == []
 
 
 def test_bge_fp16_manifest_uses_separate_directory() -> None:

@@ -127,7 +127,6 @@ Authorization: Bearer <access_token>
 
 ```text
 bge-large-zh-v1.5-fp16
-bge-large-zh-v1.5-q4f16
 qwen3.5-0.8b-opt-q4f16
 ```
 

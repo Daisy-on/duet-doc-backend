@@ -50,23 +50,6 @@ MODEL_CATALOG = {
             ModelFileSpec("onnx/model_fp16.onnx", 649_589_859),
         ),
     ),
-    "bge-large-zh-v1.5-q4f16": ModelSpec(
-        model_id="bge-large-zh-v1.5-q4f16",
-        directory="bge-large-zh-v1.5-q4f16",
-        version="v1",
-        precision="q4f16",
-        files=(
-            ModelFileSpec("config.json", 940),
-            ModelFileSpec("configuration.json", 76),
-            ModelFileSpec("quantize_config.json", 674),
-            ModelFileSpec("README.md", 1_057),
-            ModelFileSpec("special_tokens_map.json", 125),
-            ModelFileSpec("tokenizer_config.json", 394),
-            ModelFileSpec("tokenizer.json", 439_124),
-            ModelFileSpec("vocab.txt", 109_540),
-            ModelFileSpec("onnx/model_q4f16.onnx", 215_407_355),
-        ),
-    ),
     "qwen3.5-0.8b-opt-q4f16": ModelSpec(
         model_id="qwen3.5-0.8b-opt-q4f16",
         directory="qwen3.5-0.8b-opt",
