@@ -1,5 +1,11 @@
-import httpx
+import io
+import json
+import sys
 
+import httpx
+import pytest
+
+from app import bge_compatibility
 from app.bge_compatibility import DIMENSION, compare, fetch_cloud_vectors
 
 
@@ -33,6 +39,7 @@ def test_cloud_response_is_ordered_by_input_index() -> None:
 
 def test_compare_reports_cross_retrieval_loss() -> None:
     fixture = {
+        "localModel": "bge-large-zh-v1.5-q4f16",
         "passages": [
             {"id": "first", "embedding": vector(1, 0)},
             {"id": "second", "embedding": vector(0, 1)},
@@ -54,3 +61,32 @@ def test_compare_reports_cross_retrieval_loss() -> None:
     assert "本地→本地：Hit@1 1/1" in report
     assert "云端→本地：Hit@1 0/1" in report
     assert "提示：交叉检索" in report
+
+
+@pytest.mark.parametrize("precision", ["q4f16", "fp16"])
+def test_main_accepts_both_local_precisions(monkeypatch, capsys, precision: str) -> None:
+    fixture = {
+        "version": 1,
+        "localModel": f"bge-large-zh-v1.5-{precision}",
+        "passages": [{"id": "first", "text": "第一段", "embedding": vector(1, 0)}],
+        "queries": [
+            {
+                "id": "question",
+                "text": "第一段？",
+                "input": "为这个句子生成表示以用于检索相关文章：第一段？",
+                "expectedPassageId": "first",
+                "embedding": vector(1, 0),
+            }
+        ],
+    }
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "test-key")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(fixture)))
+    monkeypatch.setattr(
+        bge_compatibility,
+        "fetch_cloud_vectors",
+        lambda client, inputs: [vector(1, 0) for _ in inputs],
+    )
+
+    bge_compatibility.main()
+
+    assert "本地→云端：Hit@1 1/1" in capsys.readouterr().out

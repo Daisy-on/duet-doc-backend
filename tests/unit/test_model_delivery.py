@@ -58,6 +58,20 @@ def test_bge_manifest_uses_q4f16_directory_and_files() -> None:
     ]
 
 
+def test_bge_fp16_manifest_uses_separate_directory() -> None:
+    signer = FakeSigner()
+    service = ModelDeliveryService(signer=signer, ttl_seconds=900)
+
+    manifest = service.get_manifest("bge-large-zh-v1.5-fp16")
+
+    assert manifest.precision == "fp16"
+    assert manifest.total_size_bytes == 650_141_789
+    assert [file.path for file in manifest.files][-1] == "onnx/model_fp16.onnx"
+    assert [key for key, _ in signer.calls] == [
+        f"models/v1/bge-large-zh-v1.5-fp16/{file.path}" for file in manifest.files
+    ]
+
+
 def test_unknown_model_is_rejected_before_signing() -> None:
     signer = FakeSigner()
     service = ModelDeliveryService(signer=signer, ttl_seconds=900)

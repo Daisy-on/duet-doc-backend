@@ -65,6 +65,7 @@ def compare(fixture: dict, cloud_vectors: list[list[float]]) -> str:
     labels = ("本地→本地", "云端→云端", "云端→本地", "本地→云端")
     rankings: dict[str, list[int | None]] = {label: [] for label in labels}
     lines = [
+        f"本地模型：{fixture['localModel']}，云端模型：{MODEL}",
         f"相同输入的向量余弦相似度：最小 {min(agreements):.4f}，中位数 {median(agreements):.4f}",
         "问题 | 本地→本地 | 云端→云端 | 云端→本地 | 本地→云端",
     ]
@@ -102,7 +103,10 @@ def main() -> None:
     if not key:
         raise SystemExit("请先在服务器 .env 设置 SILICONFLOW_API_KEY。")
     fixture = json.load(sys.stdin)
-    if fixture.get("version") != 1 or fixture.get("localModel") != "bge-large-zh-v1.5-q4f16":
+    if fixture.get("version") != 1 or fixture.get("localModel") not in {
+        "bge-large-zh-v1.5-q4f16",
+        "bge-large-zh-v1.5-fp16",
+    }:
         raise SystemExit("不支持的本地样本格式或模型。")
     passages = fixture["passages"]
     queries = fixture["queries"]
