@@ -1,3 +1,5 @@
+import logging
+
 import httpx
 import pytest
 from pydantic import SecretStr
@@ -42,3 +44,28 @@ async def test_old_embedding_model_cannot_run_against_bge_index():
                 ),
                 client,
             )
+
+
+@pytest.mark.asyncio
+async def test_embedding_error_logs_provider_message_without_input_or_key(caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={"error": {"code": "InvalidInput", "message": "Too long: private text test-key"}},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = SiliconFlowEmbeddingProvider(
+            Settings(
+                siliconflow_api_key=SecretStr("test-key"),
+                rag_embedding_model="BAAI/bge-large-zh-v1.5",
+            ),
+            client,
+        )
+        with caplog.at_level(logging.WARNING), pytest.raises(httpx.HTTPStatusError):
+            await provider.embed_text("private text")
+
+    assert "status=400 code=InvalidInput" in caplog.text
+    assert "Too long:" in caplog.text
+    assert "private text" not in caplog.text
+    assert "test-key" not in caplog.text

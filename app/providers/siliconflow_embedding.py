@@ -1,8 +1,11 @@
+import logging
 import math
 
 import httpx
 
 from app.core.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 class SiliconFlowEmbeddingProvider:
@@ -23,6 +26,25 @@ class SiliconFlowEmbeddingProvider:
             headers={"Authorization": f"Bearer {self.key}"},
             json={"model": self.model, "input": [value], "encoding_format": "float"},
         )
+        if response.is_error:
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            details = body.get("error", body) if isinstance(body, dict) else {}
+            if not isinstance(details, dict):
+                details = {}
+            message = details.get("message")
+            if isinstance(message, str):
+                message = message.replace(value, "[input omitted]").replace(
+                    self.key, "[key omitted]"
+                )[:300]
+            logger.warning(
+                "SiliconFlow embedding failed: status=%s code=%s message=%s",
+                response.status_code,
+                details.get("code"),
+                message,
+            )
         response.raise_for_status()
         rows = response.json().get("data", [])
         if len(rows) != 1 or rows[0].get("index") != 0:
