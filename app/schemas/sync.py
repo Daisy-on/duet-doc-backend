@@ -53,7 +53,10 @@ class ReferencedDoc(SyncModel):
 
 class KnowledgeSource(SyncModel):
     source_id: str = Field(min_length=1, max_length=200)
-    source_type: Literal["document", "memo"]
+    source_type: Literal["document", "memo", "image"]
+    document_id: str | None = Field(default=None, max_length=200)
+    kb_id: str | None = Field(default=None, max_length=200)
+    asset_id: str | None = Field(default=None, max_length=200)
     title: str = Field(max_length=1000)
     chunk_index: int = Field(ge=0)
     heading_path: list[str] = Field(default_factory=list, max_length=20)

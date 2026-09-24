@@ -19,7 +19,7 @@ class KnowledgeSearchArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str = Field(default="", max_length=1_000)
-    source_types: list[ContextSourceType] = Field(default_factory=list, max_length=2)
+    source_types: list[ContextSourceType] = Field(default_factory=list, max_length=3)
     sort_by: str = Field(default="relevance", pattern="^(relevance|updatedAt)$")
     time_range_days: int | None = Field(default=None, ge=1, le=3650)
     top_k: int = Field(default=5, ge=1, le=8)
@@ -30,7 +30,8 @@ KNOWLEDGE_SEARCH_TOOL: dict[str, Any] = {
     "function": {
         "name": AssistantToolName.SEARCH_KNOWLEDGE_BASE.value,
         "description": (
-            "Search the user's local knowledge base for documents and memos. "
+            "Search the user's knowledge base for documents, memos, "
+            "and indexed image descriptions. "
             "Use this only when the answer depends on the user's own notes, documents, "
             "past decisions, or recent memos. Do not use it for general knowledge, writing, "
             "translation, or casual conversation."

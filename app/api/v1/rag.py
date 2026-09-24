@@ -1,16 +1,34 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import AuthenticatedUser
 from app.api.v1.sync import get_session
-from app.schemas.rag import TextIndexStatus, TextIndexUpload
+from app.schemas.rag import RagSearchRequest, RagSearchResponse, TextIndexStatus, TextIndexUpload
+from app.services.rag_search import search_rag
 from app.services.rag_text_indexes import list_text_index_statuses, upload_text_index
 
 router = APIRouter(prefix="/rag", tags=["rag"])
 Session = Annotated[AsyncSession, Depends(get_session, scope="function")]
+
+
+@router.post("/workspaces/{workspace_id}/search", response_model=RagSearchResponse)
+async def search(
+    body: RagSearchRequest,
+    workspace_id: UUID,
+    current_user: AuthenticatedUser,
+    session: Session,
+    request: Request,
+):
+    return await search_rag(
+        session,
+        current_user.user_id,
+        workspace_id,
+        body,
+        getattr(request.app.state, "rag_embedding_provider", None),
+    )
 
 
 @router.get("/workspaces/{workspace_id}/text-indexes", response_model=list[TextIndexStatus])

@@ -13,6 +13,7 @@ from app.core.exceptions import AIServiceError
 from app.core.logging import configure_logging
 from app.database import create_database
 from app.providers.deepseek import DeepSeekProvider
+from app.providers.siliconflow_embedding import SiliconFlowEmbeddingProvider
 from app.schemas.ai import APIError, ErrorResponse
 from app.services.ai_dispatcher import AIDispatcher
 from app.services.media_storage import MediaStorage
@@ -42,6 +43,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         client = httpx.AsyncClient(timeout=timeout)
         provider = DeepSeekProvider(resolved_settings, client)
         app.state.ai_dispatcher = AIDispatcher(resolved_settings, provider)
+        app.state.rag_embedding_provider = (
+            SiliconFlowEmbeddingProvider(resolved_settings, client)
+            if resolved_settings.siliconflow_api_key
+            else None
+        )
         app.state.media_storage = (
             MediaStorage(resolved_settings)
             if resolved_settings.oss_media_bucket and resolved_settings.oss_ecs_role_name

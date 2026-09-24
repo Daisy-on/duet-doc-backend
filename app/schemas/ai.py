@@ -36,6 +36,7 @@ class MessageRole(StrEnum):
 class ContextSourceType(StrEnum):
     DOCUMENT = "document"
     MEMO = "memo"
+    IMAGE = "image"
     SELECTION = "selection"
 
 
@@ -110,6 +111,7 @@ class AIContext(APIModel):
     chunk_index: int | None = Field(default=None, ge=0)
     heading_path: list[str] = Field(default_factory=list, max_length=10)
     score: float | None = None
+    asset_id: str | None = Field(default=None, max_length=200)
 
 
 class AIOptions(APIModel):
@@ -164,8 +166,7 @@ class AIRequest(APIModel):
             raise ValueError("Tool continuation requests must disable further tool calls.")
         if self.tool_continuation and (
             AICapability.KNOWLEDGE_SEARCH not in self.capabilities
-            or self.tool_continuation.tool_call.name
-            != AssistantToolName.SEARCH_KNOWLEDGE_BASE
+            or self.tool_continuation.tool_call.name != AssistantToolName.SEARCH_KNOWLEDGE_BASE
         ):
             raise ValueError("Invalid tool continuation.")
         return self

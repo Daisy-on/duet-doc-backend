@@ -61,3 +61,44 @@ class TextIndexStatus(RagModel):
     chunk_count: int
     indexed_at: datetime | None
     updated_at: datetime
+
+
+class RagSearchRequest(RagModel):
+    query: str = Field(min_length=1, max_length=2000)
+    embedding: list[float] | None = Field(default=None, min_length=1024, max_length=1024)
+    allow_cloud_embedding: bool = False
+    source_types: list[Literal["document", "memo", "image"]] = Field(
+        default_factory=lambda: ["document", "memo", "image"]
+    )
+    sort_by: Literal["relevance", "updatedAt"] = "relevance"
+    time_range_days: int | None = Field(default=None, ge=1, le=3650)
+    top_k: int = Field(default=5, ge=1, le=12)
+
+    @model_validator(mode="after")
+    def validate_embedding(self):
+        if self.embedding is not None:
+            if not all(math.isfinite(value) for value in self.embedding):
+                raise ValueError("embedding values must be finite")
+            if not any(value != 0 for value in self.embedding):
+                raise ValueError("embedding must not be zero")
+        return self
+
+
+class RagSearchHit(RagModel):
+    source_id: str
+    source_type: Literal["document", "memo", "image"]
+    document_id: str
+    kb_id: str
+    title: str
+    chunk_id: str
+    chunk_index: int
+    heading_path: list[str]
+    content: str
+    asset_id: str | None = None
+    score: float
+    source_updated_at: datetime
+
+
+class RagSearchResponse(RagModel):
+    has_index: bool
+    hits: list[RagSearchHit]
