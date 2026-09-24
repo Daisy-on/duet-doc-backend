@@ -21,7 +21,7 @@ def payload(count: int) -> dict:
         "source_fingerprint": "fingerprint",
         "embedding_model": "bge-large-zh-v1.5",
         "embedding_dimension": 1024,
-        "chunker_version": "v2",
+        "chunker_version": "v3",
         "chunks": [chunk(index) for index in range(count)],
     }
 

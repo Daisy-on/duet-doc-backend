@@ -15,7 +15,7 @@ from app.services.sync_service import workspace_for_user
 
 EMBEDDING_MODEL = "BAAI/bge-large-zh-v1.5"
 EMBEDDING_DIMENSION = 1024
-INDEX_VERSION = "bge-v1"
+INDEX_VERSION = "bge-v3"
 IMAGE_INDEX_VERSION = "bge-v2:qwen3-vl-flash"
 
 
@@ -64,8 +64,7 @@ def _index_is_current(row, fingerprint: str, modality: str) -> bool:
         and row["source_fingerprint"] == fingerprint
         and row["embedding_model"] == EMBEDDING_MODEL
         and row["embedding_dimension"] == EMBEDDING_DIMENSION
-        and row["index_version"]
-        == (IMAGE_INDEX_VERSION if modality == "image" else INDEX_VERSION)
+        and row["index_version"] == (IMAGE_INDEX_VERSION if modality == "image" else INDEX_VERSION)
     )
 
 
@@ -77,7 +76,7 @@ async def _client_indexed_revisions(session: AsyncSession, workspace_id: UUID):
                     "SELECT source_id,source_revision FROM rag_source_indexes "
                     "WHERE workspace_id=:wid AND status='ready' "
                     "AND embedding_model='bge-large-zh-v1.5' AND embedding_dimension=1024 "
-                    "AND chunker_version='v2'"
+                    "AND chunker_version='v3'"
                 ),
                 {"wid": workspace_id},
             )
@@ -97,10 +96,12 @@ async def cloud_rag_coverage(
         ("text", row["id"]): text_fingerprint(row["title"], row["content"], row["content_format"])
         for row in documents
     }
-    fingerprints.update({
-        ("image", row["asset_id"]): row["md5_hex"]
-        for row in await _current_images(session, workspace_id)
-    })
+    fingerprints.update(
+        {
+            ("image", row["asset_id"]): row["md5_hex"]
+            for row in await _current_images(session, workspace_id)
+        }
+    )
     rows = (
         (
             await session.execute(
@@ -131,7 +132,8 @@ async def cloud_rag_coverage(
                 "WHERE idx.workspace_id=:wid AND idx.status='ready' "
                 "AND idx.embedding_model='bge-large-zh-v1.5' "
                 "AND idx.embedding_dimension=1024 "
-                "AND idx.source_revision=doc.revision AND doc.deleted_at IS NULL)"
+                "AND idx.source_revision=doc.revision AND idx.chunker_version='v3' "
+                "AND doc.deleted_at IS NULL)"
             ),
             {"wid": workspace_id},
         )
@@ -201,7 +203,12 @@ async def cloud_rag_plan(
         current = existing.get(("text", row["id"]))
         if _index_is_current(current, fingerprint, "text"):
             continue
-        chunks = chunk_document(row["title"], row["content"], row["content_format"])
+        chunks = chunk_document(
+            row["title"],
+            row["content"],
+            row["content_format"],
+            source_type_for_kb(row["kb_id"]),
+        )
         if not chunks:
             continue
         selected_documents.append(row)
@@ -293,16 +300,19 @@ async def create_cloud_rag_run(
         current = existing.get(("text", row["id"]))
         if _index_is_current(current, fingerprint, "text"):
             continue
-        if not chunk_document(row["title"], row["content"], row["content_format"]):
+        if not chunk_document(
+            row["title"],
+            row["content"],
+            row["content_format"],
+            source_type_for_kb(row["kb_id"]),
+        ):
             continue
         jobs.append(
             ("text", source_type_for_kb(row["kb_id"]), row["id"], row["revision"], fingerprint)
         )
     if include_images:
         for row in await _current_images(session, workspace_id):
-            if _index_is_current(
-                existing.get(("image", row["asset_id"])), row["md5_hex"], "image"
-            ):
+            if _index_is_current(existing.get(("image", row["asset_id"])), row["md5_hex"], "image"):
                 continue
             jobs.append(("image", "image", row["asset_id"], None, row["md5_hex"]))
     for modality, source_type, source_id, revision, fingerprint in jobs:

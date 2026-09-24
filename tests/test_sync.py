@@ -137,7 +137,7 @@ def text_index(revision=1, fingerprint="fingerprint-v1"):
         "source_fingerprint": fingerprint,
         "embedding_model": "bge-large-zh-v1.5",
         "embedding_dimension": 1024,
-        "chunker_version": "v2",
+        "chunker_version": "v3",
         "chunks": [
             {
                 "id": f"chunk-{revision}",

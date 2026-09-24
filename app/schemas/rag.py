@@ -34,7 +34,7 @@ class TextIndexUpload(RagModel):
     source_fingerprint: str = Field(min_length=1, max_length=128)
     embedding_model: Literal["bge-large-zh-v1.5"]
     embedding_dimension: Literal[1024]
-    chunker_version: Literal["v2"]
+    chunker_version: Literal["v3"]
     chunks: list[TextIndexChunk] = Field(max_length=MAX_TEXT_INDEX_CHUNKS)
 
     @model_validator(mode="after")

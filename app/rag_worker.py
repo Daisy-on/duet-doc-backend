@@ -14,12 +14,14 @@ from app.providers.siliconflow_embedding import SiliconFlowEmbeddingProvider
 from app.services.cloud_rag_chunker import (
     chunk_document,
     chunk_image_description,
+    passage_text,
     text_fingerprint,
 )
 from app.services.media_storage import MediaStorage
+from app.services.rag_text_indexes import source_type_for_kb
 
 logger = logging.getLogger(__name__)
-INDEX_VERSION = "bge-v1"
+INDEX_VERSION = "bge-v3"
 IMAGE_INDEX_VERSION = "bge-v2:qwen3-vl-flash"
 
 
@@ -81,7 +83,7 @@ async def load_source(session, job):
         (
             await session.execute(
                 text(
-                    "SELECT title,content,content_format,revision FROM documents "
+                    "SELECT kb_id,title,content,content_format,revision FROM documents "
                     "WHERE workspace_id=:wid AND id=:sid AND deleted_at IS NULL"
                 ),
                 {"wid": job["workspace_id"], "sid": job["source_id"]},
@@ -125,12 +127,16 @@ async def process_job(sessions, provider, job, vision=None, media_storage=None, 
                         chunk.content_hash,
                         job["source_id"],
                         embedding,
+                        [],
                     )
                 )
             index_version = IMAGE_INDEX_VERSION
         else:
             for chunk in chunk_document(
-                source["title"], source["content"], source["content_format"]
+                source["title"],
+                source["content"],
+                source["content_format"],
+                source_type_for_kb(source["kb_id"]),
             ):
                 cached = await session.scalar(
                     text(
@@ -140,9 +146,22 @@ async def process_job(sessions, provider, job, vision=None, media_storage=None, 
                     {"wid": job["workspace_id"], "hash": chunk.content_hash},
                 )
                 embedding = (
-                    json.loads(cached) if cached else await provider.embed_text(chunk.content)
+                    json.loads(cached)
+                    if cached
+                    else await provider.embed_text(
+                        passage_text(source["title"], chunk.heading_path, chunk.content)
+                    )
                 )
-                chunks.append((chunk.index, chunk.content, chunk.content_hash, None, embedding))
+                chunks.append(
+                    (
+                        chunk.index,
+                        chunk.content,
+                        chunk.content_hash,
+                        None,
+                        embedding,
+                        chunk.heading_path,
+                    )
+                )
         if await load_source(session, job) is None:
             await finish_job(session, job, "skipped")
             await session.commit()
@@ -179,7 +198,7 @@ async def process_job(sessions, provider, job, vision=None, media_storage=None, 
             ),
             {"wid": job["workspace_id"], "modality": job["modality"], "sid": job["source_id"]},
         )
-        for index, content, content_hash, asset_id, embedding in chunks:
+        for index, content, content_hash, asset_id, embedding, heading_path in chunks:
             await session.execute(
                 text(
                     "INSERT INTO rag_cloud_chunks "
@@ -197,9 +216,11 @@ async def process_job(sessions, provider, job, vision=None, media_storage=None, 
                     "content": content,
                     "hash": content_hash,
                     "asset": asset_id,
-                    "metadata": json.dumps({"vision_model": vision.model})
-                    if asset_id and vision
-                    else "{}",
+                    "metadata": json.dumps(
+                        {"vision_model": vision.model}
+                        if asset_id and vision
+                        else {"heading_path": heading_path}
+                    ),
                     "embedding": "[" + ",".join(str(value) for value in embedding) + "]",
                 },
             )

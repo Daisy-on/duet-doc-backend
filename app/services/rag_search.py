@@ -11,12 +11,12 @@ from app.services.sync_service import workspace_for_user
 
 CURRENT_CLIENT = (
     "idx.status='ready' AND idx.embedding_model='bge-large-zh-v1.5' "
-    "AND idx.embedding_dimension=1024 AND idx.chunker_version='v2' "
+    "AND idx.embedding_dimension=1024 AND idx.chunker_version='v3' "
     "AND idx.source_revision=doc.revision"
 )
 CURRENT_CLOUD_TEXT = (
     "idx.status='ready' AND idx.embedding_model='BAAI/bge-large-zh-v1.5' "
-    "AND idx.embedding_dimension=1024 AND idx.index_version='bge-v1' "
+    "AND idx.embedding_dimension=1024 AND idx.index_version='bge-v3' "
     "AND idx.source_revision=doc.revision"
 )
 CURRENT_CLOUD_IMAGE = (
@@ -115,7 +115,9 @@ async def search_rag(
                     "OR (idx.source_type='memo' AND :memo_enabled)) "
                     "UNION ALL "
                     "SELECT idx.source_id,idx.source_type,doc.id,doc.kb_id,doc.title,"
-                    "chunk.id,chunk.chunk_index,'[]'::jsonb,chunk.content,NULL::text,"
+                    "chunk.id,chunk.chunk_index,"
+                    "COALESCE(chunk.metadata->'heading_path','[]'::jsonb),"
+                    "chunk.content,NULL::text,"
                     "doc.updated_at,chunk.embedding <=> CAST(:embedding AS vector) "
                     "FROM rag_cloud_chunks chunk JOIN rag_cloud_source_indexes idx "
                     "ON idx.workspace_id=chunk.workspace_id AND idx.modality=chunk.modality "
@@ -130,7 +132,7 @@ async def search_rag(
                     "WHERE client.workspace_id=idx.workspace_id AND client.source_id=idx.source_id "
                     "AND client.status='ready' AND client.source_revision=doc.revision "
                     "AND client.embedding_model='bge-large-zh-v1.5' "
-                    "AND client.embedding_dimension=1024 AND client.chunker_version='v2') "
+                    "AND client.embedding_dimension=1024 AND client.chunker_version='v3') "
                     "UNION ALL "
                     "SELECT idx.source_id,'image'::text,doc.id,doc.kb_id,doc.title,"
                     "chunk.id,chunk.chunk_index,'[]'::jsonb,chunk.content,chunk.asset_id,"
