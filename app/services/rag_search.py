@@ -21,7 +21,7 @@ CURRENT_CLOUD_TEXT = (
 )
 CURRENT_CLOUD_IMAGE = (
     "idx.status='ready' AND idx.embedding_model='BAAI/bge-large-zh-v1.5' "
-    "AND idx.embedding_dimension=1024 AND idx.index_version='bge-v1:qwen3-vl-flash' "
+    "AND idx.embedding_dimension=1024 AND idx.index_version='bge-v2:qwen3-vl-flash' "
     "AND idx.source_fingerprint=asset.md5_hex"
 )
 

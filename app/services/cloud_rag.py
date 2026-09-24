@@ -16,7 +16,7 @@ from app.services.sync_service import workspace_for_user
 EMBEDDING_MODEL = "BAAI/bge-large-zh-v1.5"
 EMBEDDING_DIMENSION = 1024
 INDEX_VERSION = "bge-v1"
-IMAGE_INDEX_VERSION = "bge-v1:qwen3-vl-flash"
+IMAGE_INDEX_VERSION = "bge-v2:qwen3-vl-flash"
 
 
 async def _current_sources(session: AsyncSession, workspace_id: UUID):

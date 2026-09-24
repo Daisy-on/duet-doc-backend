@@ -21,6 +21,34 @@ class CloudTextChunk:
     content_hash: str
 
 
+def chunk_image_description(description: str) -> list[CloudTextChunk]:
+    remaining = description.strip()
+    chunks: list[CloudTextChunk] = []
+    max_chars = 320
+    min_break = 160
+    separators = ("\n\n", "\n", "。", "！", "？", ".", "!", "?", "；", ";", "，", ",", " ")
+
+    while remaining:
+        end = min(len(remaining), max_chars)
+        if end < len(remaining):
+            for separator in separators:
+                boundary = remaining.rfind(separator, min_break, end)
+                if boundary >= 0:
+                    end = boundary + len(separator)
+                    break
+        content = remaining[:end].strip()
+        if content:
+            chunks.append(
+                CloudTextChunk(
+                    index=len(chunks),
+                    content=content,
+                    content_hash=hashlib.sha256(content.encode()).hexdigest(),
+                )
+            )
+        remaining = remaining[end:].lstrip()
+    return chunks
+
+
 def document_text(content: str, content_format: str) -> str:
     if content_format == "html":
         parser = _TextParser()

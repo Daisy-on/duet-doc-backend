@@ -20,19 +20,22 @@ class DashScopeVisionProvider:
             headers={"Authorization": f"Bearer {self.key}"},
             json={
                 "model": self.model,
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": image_url}},
-                        {
-                            "type": "text",
-                            "text": (
-                                "简要描述图片中可检索的主题、物体、文字和图表信息。"
-                                "只输出客观描述，不要推测看不清的内容。"
-                            ),
-                        },
-                    ],
-                }],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": image_url}},
+                            {
+                                "type": "text",
+                                "text": (
+                                    "客观描述图片中可用于检索的信息。按图片实际内容，保留可辨认的"
+                                    "文字、数字、代码或报错；说明图表关系或画面主体。"
+                                    "用简短的句子或分行陈述，不套固定分类，不推测看不清的内容。"
+                                ),
+                            },
+                        ],
+                    }
+                ],
             },
         )
         response.raise_for_status()

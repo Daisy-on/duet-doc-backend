@@ -15,6 +15,10 @@ async def test_image_description_uses_signed_url_and_configured_model():
         assert request.headers["Authorization"] == "Bearer test-key"
         assert body["model"] == "qwen3-vl-flash"
         assert body["messages"][0]["content"][0]["image_url"]["url"] == "https://oss.test/signed"
+        prompt = body["messages"][0]["content"][1]["text"]
+        assert "客观描述" in prompt
+        assert "代码或报错" in prompt
+        assert "不套固定分类" in prompt
         return httpx.Response(
             200, json={"choices": [{"message": {"content": "  图中是一个图表。  "}}]}
         )

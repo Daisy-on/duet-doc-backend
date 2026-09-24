@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import json
 import logging
 from datetime import UTC, datetime, timedelta
@@ -12,12 +11,16 @@ from app.core.logging import configure_logging
 from app.database import create_database
 from app.providers.dashscope_vision import DashScopeVisionProvider
 from app.providers.siliconflow_embedding import SiliconFlowEmbeddingProvider
-from app.services.cloud_rag_chunker import chunk_document, text_fingerprint
+from app.services.cloud_rag_chunker import (
+    chunk_document,
+    chunk_image_description,
+    text_fingerprint,
+)
 from app.services.media_storage import MediaStorage
 
 logger = logging.getLogger(__name__)
 INDEX_VERSION = "bge-v1"
-IMAGE_INDEX_VERSION = "bge-v1:qwen3-vl-flash"
+IMAGE_INDEX_VERSION = "bge-v2:qwen3-vl-flash"
 
 
 async def claim_job(sessions):
@@ -113,16 +116,17 @@ async def process_job(sessions, provider, job, vision=None, media_storage=None, 
                 source["object_key"], datetime.now(UTC) + timedelta(seconds=media_ttl)
             )
             description = await vision.describe_image(image_url)
-            embedding = await provider.embed_text(description)
-            chunks.append(
-                (
-                    0,
-                    description,
-                    hashlib.sha256(description.encode()).hexdigest(),
-                    job["source_id"],
-                    embedding,
+            for chunk in chunk_image_description(description):
+                embedding = await provider.embed_text(chunk.content)
+                chunks.append(
+                    (
+                        chunk.index,
+                        chunk.content,
+                        chunk.content_hash,
+                        job["source_id"],
+                        embedding,
+                    )
                 )
-            )
             index_version = IMAGE_INDEX_VERSION
         else:
             for chunk in chunk_document(
