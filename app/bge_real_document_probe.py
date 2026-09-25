@@ -1,4 +1,4 @@
-"""Compare local and cloud BGE retrieval on sampled real document chunks."""
+"""Compare local and cloud BGE retrieval on real document chunks."""
 
 import argparse
 import json
@@ -11,14 +11,20 @@ import httpx
 from app.bge_compatibility import MODEL, fetch_cloud_vectors, normalized, similarity
 
 BATCH_SIZE = 8
+MAX_PASSAGES = 2000
 
 
 def validate(fixture: dict) -> tuple[list[dict], list[dict]]:
-    if fixture.get("version") != 2 or fixture.get("localModel") != "bge-large-zh-v1.5-fp16":
-        raise ValueError("需要真实文档 FP16 对照样本（version 2）。")
+    if (
+        fixture.get("version") not in {2, 3}
+        or fixture.get("localModel") != "bge-large-zh-v1.5-fp16"
+    ):
+        raise ValueError("需要真实文档 FP16 对照样本（version 2 或 3）。")
     passages, queries = fixture.get("passages"), fixture.get("queries")
-    if not isinstance(passages, list) or not 1 <= len(passages) <= 64:
-        raise ValueError("分块数量应为 1-64。")
+    if not isinstance(passages, list) or not 1 <= len(passages) <= MAX_PASSAGES:
+        raise ValueError(f"分块数量应为 1-{MAX_PASSAGES}。")
+    if fixture["version"] == 3 and len(passages) != fixture.get("totalChunkCount"):
+        raise ValueError("全文样本的分块数与 totalChunkCount 不一致。")
     if not isinstance(queries, list) or not 1 <= len(queries) <= 20:
         raise ValueError("问题数量应为 1-20。")
     ids = {row["id"] for row in passages}
@@ -40,6 +46,26 @@ def validate(fixture: dict) -> tuple[list[dict], list[dict]]:
 def rank(query: list[float], passages: list[dict], expected: set[str]) -> int | None:
     ordered = sorted(passages, key=lambda row: similarity(query, row["embedding"]), reverse=True)
     return next((index for index, row in enumerate(ordered, 1) if row["id"] in expected), None)
+
+
+def local_report(fixture: dict) -> str:
+    passages, queries = validate(fixture)
+    indexed = [{"id": row["id"], "embedding": normalized(row["embedding"])} for row in passages]
+    ranks = [
+        rank(normalized(row["embedding"]), indexed, set(row["expectedPassageIds"]))
+        for row in queries
+    ]
+    lines = ["本地→本地全文排名："]
+    lines.extend(
+        f"{row['id']} | {value or '未命中'}" for row, value in zip(queries, ranks, strict=True)
+    )
+    lines.append(
+        f"Hit@1 {sum(value == 1 for value in ranks)}/{len(ranks)}，"
+        f"Hit@3 {sum(value is not None and value <= 3 for value in ranks)}/{len(ranks)}，"
+        f"Hit@5 {sum(value is not None and value <= 5 for value in ranks)}/{len(ranks)}，"
+        f"MRR {sum(1 / value for value in ranks if value is not None) / len(ranks):.3f}"
+    )
+    return "\n".join(lines)
 
 
 def compare(fixture: dict, cloud_vectors: list[list[float]]) -> str:
@@ -108,6 +134,7 @@ def main() -> None:
     )
     if not args.confirm_cloud_calls:
         print("当前仅预览，没有调用云端。确认费用后加 --confirm-cloud-calls 执行。")
+        print(local_report(fixture))
         return
     key = os.environ.get("SILICONFLOW_API_KEY")
     if not key:

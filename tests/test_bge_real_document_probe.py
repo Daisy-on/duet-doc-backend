@@ -1,6 +1,6 @@
 import pytest
 
-from app.bge_real_document_probe import compare, rank, validate
+from app.bge_real_document_probe import compare, local_report, rank, validate
 
 
 def vector(index: int) -> list[float]:
@@ -37,4 +37,22 @@ def test_validate_rejects_missing_gold_chunk() -> None:
     data = fixture()
     data["queries"][0]["expectedPassageIds"] = ["missing"]
     with pytest.raises(ValueError, match="预期分块"):
+        validate(data)
+
+
+def test_full_document_accepts_multiple_gold_chunks() -> None:
+    data = fixture()
+    data["version"] = 3
+    data["queries"][0]["expectedPassageIds"] = ["a", "b"]
+    passages, queries = validate(data)
+    assert len(passages) == data["totalChunkCount"]
+    assert rank(vector(1), passages, set(queries[0]["expectedPassageIds"])) == 1
+    assert "Hit@1 1/1" in local_report(data)
+
+
+def test_full_document_rejects_partial_export() -> None:
+    data = fixture()
+    data["version"] = 3
+    data["totalChunkCount"] = 3
+    with pytest.raises(ValueError, match="全文样本"):
         validate(data)
