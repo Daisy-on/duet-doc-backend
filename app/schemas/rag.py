@@ -84,6 +84,13 @@ class RagSearchRequest(RagModel):
         return self
 
 
+class RagSearchNeighbor(RagModel):
+    chunk_id: str
+    chunk_index: int
+    heading_path: list[str]
+    content: str
+
+
 class RagSearchHit(RagModel):
     source_id: str
     source_type: Literal["document", "memo", "image"]
@@ -97,6 +104,7 @@ class RagSearchHit(RagModel):
     asset_id: str | None = None
     score: float
     source_updated_at: datetime
+    neighbors: list[RagSearchNeighbor] = Field(default_factory=list)
 
 
 class RagSearchResponse(RagModel):

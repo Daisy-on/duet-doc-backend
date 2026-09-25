@@ -1,12 +1,15 @@
+import json
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import text
+from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.providers.siliconflow_embedding import SiliconFlowEmbeddingProvider
-from app.schemas.rag import RagSearchHit, RagSearchRequest, RagSearchResponse
+from app.schemas.rag import RagSearchHit, RagSearchNeighbor, RagSearchRequest, RagSearchResponse
 from app.services.sync_service import workspace_for_user
 
 CURRENT_CLIENT = (
@@ -36,6 +39,79 @@ def _filters(body: RagSearchRequest) -> dict:
         if body.time_range_days
         else None,
     }
+
+
+async def _text_neighbors(
+    session: AsyncSession, workspace_id: UUID, hits: Sequence[RowMapping]
+) -> dict[tuple[str, int, str], list[RagSearchNeighbor]]:
+    targets = [
+        {
+            "source_id": row["source_id"],
+            "chunk_index": row["chunk_index"],
+            "index_origin": row["index_origin"],
+        }
+        for row in hits
+        if row["source_type"] != "image"
+    ]
+    if not targets:
+        return {}
+    rows = (
+        (
+            await session.execute(
+                text(
+                    "WITH targets AS (SELECT * FROM jsonb_to_recordset(CAST(:targets AS jsonb)) "
+                    "AS t(source_id text,chunk_index integer,index_origin text)) "
+                    "SELECT target.source_id,target.chunk_index AS anchor_index,"
+                    "target.index_origin,chunk.id AS chunk_id,chunk.chunk_index,"
+                    "chunk.heading_path,chunk.content "
+                    "FROM targets target JOIN rag_source_indexes idx "
+                    "ON idx.workspace_id=:wid AND idx.source_id=target.source_id "
+                    "JOIN documents doc ON doc.workspace_id=idx.workspace_id "
+                    "AND doc.id=idx.source_id "
+                    "JOIN rag_text_chunks chunk ON chunk.workspace_id=idx.workspace_id "
+                    "AND chunk.source_id=idx.source_id "
+                    f"WHERE target.index_origin='client' AND {CURRENT_CLIENT} "
+                    "AND doc.deleted_at IS NULL AND chunk.chunk_index IN "
+                    "(target.chunk_index-1,target.chunk_index+1) "
+                    "UNION ALL "
+                    "SELECT target.source_id,target.chunk_index,target.index_origin,"
+                    "chunk.id,chunk.chunk_index,"
+                    "COALESCE(chunk.metadata->'heading_path','[]'::jsonb),chunk.content "
+                    "FROM targets target JOIN rag_cloud_source_indexes idx "
+                    "ON idx.workspace_id=:wid AND idx.source_id=target.source_id "
+                    "AND idx.modality='text' "
+                    "JOIN documents doc ON doc.workspace_id=idx.workspace_id "
+                    "AND doc.id=idx.source_id "
+                    "JOIN rag_cloud_chunks chunk ON chunk.workspace_id=idx.workspace_id "
+                    "AND chunk.source_id=idx.source_id AND chunk.modality='text' "
+                    f"WHERE target.index_origin='cloud' AND {CURRENT_CLOUD_TEXT} "
+                    "AND doc.deleted_at IS NULL AND chunk.chunk_index IN "
+                    "(target.chunk_index-1,target.chunk_index+1)"
+                ),
+                {"wid": workspace_id, "targets": json.dumps(targets)},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    headings = {
+        (row["source_id"], row["chunk_index"], row["index_origin"]): row["heading_path"]
+        for row in hits
+        if row["source_type"] != "image"
+    }
+    neighbors: dict[tuple[str, int, str], list[RagSearchNeighbor]] = {}
+    for row in rows:
+        key = (row["source_id"], row["anchor_index"], row["index_origin"])
+        if row["heading_path"] == headings.get(key):
+            neighbors.setdefault(key, []).append(
+                RagSearchNeighbor(
+                    chunk_id=row["chunk_id"],
+                    chunk_index=row["chunk_index"],
+                    heading_path=row["heading_path"],
+                    content=row["content"],
+                )
+            )
+    return neighbors
 
 
 async def search_rag(
@@ -103,7 +179,8 @@ async def search_rag(
                     "SELECT idx.source_id,idx.source_type,doc.id AS document_id,doc.kb_id,"
                     "doc.title,chunk.id AS chunk_id,chunk.chunk_index,chunk.heading_path,"
                     "chunk.content,NULL::text AS asset_id,doc.updated_at AS source_updated_at,"
-                    "chunk.embedding <=> CAST(:embedding AS vector) AS distance "
+                    "chunk.embedding <=> CAST(:embedding AS vector) AS distance,"
+                    "'client'::text AS index_origin "
                     "FROM rag_text_chunks chunk JOIN rag_source_indexes idx "
                     "ON idx.workspace_id=chunk.workspace_id AND idx.source_id=chunk.source_id "
                     "JOIN documents doc ON doc.workspace_id=idx.workspace_id "
@@ -118,7 +195,7 @@ async def search_rag(
                     "chunk.id,chunk.chunk_index,"
                     "COALESCE(chunk.metadata->'heading_path','[]'::jsonb),"
                     "chunk.content,NULL::text,"
-                    "doc.updated_at,chunk.embedding <=> CAST(:embedding AS vector) "
+                    "doc.updated_at,chunk.embedding <=> CAST(:embedding AS vector),'cloud'::text "
                     "FROM rag_cloud_chunks chunk JOIN rag_cloud_source_indexes idx "
                     "ON idx.workspace_id=chunk.workspace_id AND idx.modality=chunk.modality "
                     "AND idx.source_id=chunk.source_id JOIN documents doc "
@@ -136,7 +213,7 @@ async def search_rag(
                     "UNION ALL "
                     "SELECT idx.source_id,'image'::text,doc.id,doc.kb_id,doc.title,"
                     "chunk.id,chunk.chunk_index,'[]'::jsonb,chunk.content,chunk.asset_id,"
-                    "doc.updated_at,chunk.embedding <=> CAST(:embedding AS vector) "
+                    "doc.updated_at,chunk.embedding <=> CAST(:embedding AS vector),'image'::text "
                     "FROM rag_cloud_chunks chunk JOIN rag_cloud_source_indexes idx "
                     "ON idx.workspace_id=chunk.workspace_id AND idx.modality=chunk.modality "
                     "AND idx.source_id=chunk.source_id JOIN media_assets asset "
@@ -163,6 +240,7 @@ async def search_rag(
         .mappings()
         .all()
     )
+    neighbors = await _text_neighbors(session, workspace_id, rows)
     return RagSearchResponse(
         has_index=True,
         hits=[
@@ -184,6 +262,9 @@ async def search_rag(
                 },
                 score=max(0.0, 1.0 - row["distance"]),
                 source_updated_at=row["source_updated_at"],
+                neighbors=neighbors.get(
+                    (row["source_id"], row["chunk_index"], row["index_origin"]), []
+                ),
             )
             for row in rows
         ],
