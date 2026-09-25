@@ -177,6 +177,19 @@ async def push(session: AsyncSession, user_id, request: PushRequest):
                 )
             elif operation.entity_type == "document":
                 await replace_document_media_refs(session, wid, operation.entity_id, set())
+                await session.execute(
+                    text(
+                        "DELETE FROM rag_source_indexes WHERE workspace_id=:wid AND source_id=:id"
+                    ),
+                    params,
+                )
+                await session.execute(
+                    text(
+                        "DELETE FROM rag_cloud_source_indexes "
+                        "WHERE workspace_id=:wid AND modality='text' AND source_id=:id"
+                    ),
+                    params,
+                )
         else:
             data = DATA_MODELS[operation.entity_type].model_validate(operation.data).model_dump()
             columns = list(data)
@@ -204,6 +217,27 @@ async def push(session: AsyncSession, user_id, request: PushRequest):
             if operation.entity_type == "document":
                 asset_ids = extract_document_asset_ids(data["content"], data["content_format"])
                 await replace_document_media_refs(session, wid, operation.entity_id, asset_ids)
+                source_type = "memo" if data["kb_id"] == "kb-memo-system" else "document"
+                await session.execute(
+                    text(
+                        "INSERT INTO rag_source_indexes "
+                        "(workspace_id,source_id,source_type,source_revision,status) "
+                        "VALUES (:wid,:id,:source_type,:rev,'pending') "
+                        "ON CONFLICT (workspace_id,source_id) DO UPDATE SET "
+                        "source_type=EXCLUDED.source_type,"
+                        "source_revision=EXCLUDED.source_revision,"
+                        "status=CASE WHEN rag_source_indexes.status='ready' "
+                        "THEN 'stale' ELSE 'pending' END,updated_at=now()"
+                    ),
+                    {**params, "source_type": source_type},
+                )
+                await session.execute(
+                    text(
+                        "UPDATE rag_cloud_source_indexes SET status='stale',updated_at=now() "
+                        "WHERE workspace_id=:wid AND modality='text' AND source_id=:id"
+                    ),
+                    params,
+                )
         sequence += 1
         snapshot = (
             (

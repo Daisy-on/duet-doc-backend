@@ -31,6 +31,16 @@ class Settings(BaseSettings):
     deepseek_fast_model: str = "deepseek-v4-flash"
     deepseek_quality_model: str = "deepseek-v4-pro"
 
+    dashscope_api_key: SecretStr | None = None
+    rag_vision_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    rag_vision_model: str = "qwen3-vl-flash"
+    siliconflow_api_key: SecretStr | None = None
+    rag_embedding_base_url: str = "https://api.siliconflow.cn/v1/embeddings"
+    rag_embedding_model: str = "BAAI/bge-large-zh-v1.5"
+    rag_embedding_dimension: int = Field(default=1024, ge=1, le=4096)
+    rag_worker_poll_seconds: float = Field(default=2, ge=0.2, le=60)
+    rag_worker_max_attempts: int = Field(default=3, ge=1, le=10)
+
     ai_connect_timeout_seconds: float = 10
     ai_read_timeout_seconds: float = 120
     ai_max_messages: int = 50

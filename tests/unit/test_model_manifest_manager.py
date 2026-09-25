@@ -43,15 +43,15 @@ async def test_manifest_is_reused_without_consuming_another_grant() -> None:
     )
     user_id = uuid4()
 
-    first = await manager.get_manifest(user_id, "multilingual-e5-base-fp16", "192.0.2.1")
-    second = await manager.get_manifest(user_id, "multilingual-e5-base-fp16", "192.0.2.1")
+    first = await manager.get_manifest(user_id, "bge-large-zh-v1.5-fp16", "192.0.2.1")
+    second = await manager.get_manifest(user_id, "bge-large-zh-v1.5-fp16", "192.0.2.1")
 
     assert first == second
     assert issuer.calls == 1
     assert signer.calls == len(first.files)
 
     clock.value += timedelta(seconds=871)
-    third = await manager.get_manifest(user_id, "multilingual-e5-base-fp16", "192.0.2.1")
+    third = await manager.get_manifest(user_id, "bge-large-zh-v1.5-fp16", "192.0.2.1")
     assert third != first
     assert issuer.calls == 2
 

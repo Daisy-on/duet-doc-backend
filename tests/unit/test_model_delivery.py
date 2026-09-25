@@ -22,16 +22,39 @@ def test_manifest_only_signs_catalogued_model_files() -> None:
     signer = FakeSigner()
     service = ModelDeliveryService(signer=signer, ttl_seconds=900)
 
-    manifest = service.get_manifest("multilingual-e5-base-fp16")
+    manifest = service.get_manifest("bge-large-zh-v1.5-fp16")
 
-    spec = MODEL_CATALOG["multilingual-e5-base-fp16"]
+    spec = MODEL_CATALOG["bge-large-zh-v1.5-fp16"]
     assert manifest.model_id == spec.model_id
     assert manifest.total_size_bytes == sum(file.size_bytes for file in spec.files)
     assert [file.path for file in manifest.files] == [file.path for file in spec.files]
     assert [key for key, _ in signer.calls] == [
-        f"models/v1/multilingual-e5-base/{file.path}" for file in spec.files
+        f"models/v1/bge-large-zh-v1.5-fp16/{file.path}" for file in spec.files
     ]
     assert len({expiration for _, expiration in signer.calls}) == 1
+
+
+def test_bge_q4f16_manifest_is_no_longer_available() -> None:
+    signer = FakeSigner()
+    service = ModelDeliveryService(signer=signer, ttl_seconds=900)
+
+    with pytest.raises(ModelNotFoundError):
+        service.get_manifest("bge-large-zh-v1.5-q4f16")
+    assert signer.calls == []
+
+
+def test_bge_fp16_manifest_uses_separate_directory() -> None:
+    signer = FakeSigner()
+    service = ModelDeliveryService(signer=signer, ttl_seconds=900)
+
+    manifest = service.get_manifest("bge-large-zh-v1.5-fp16")
+
+    assert manifest.precision == "fp16"
+    assert manifest.total_size_bytes == 650_141_789
+    assert [file.path for file in manifest.files][-1] == "onnx/model_fp16.onnx"
+    assert [key for key, _ in signer.calls] == [
+        f"models/v1/bge-large-zh-v1.5-fp16/{file.path}" for file in manifest.files
+    ]
 
 
 def test_unknown_model_is_rejected_before_signing() -> None:

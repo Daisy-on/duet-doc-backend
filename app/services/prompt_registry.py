@@ -44,6 +44,7 @@ def _system_message(request: AIRequest) -> AIMessage:
         tool_policy = (
             "\n\n当问题依赖用户自己的文档、小记、历史决策或最近记录时，可以调用知识库检索工具。"
             "不要为一般知识、翻译、改写或闲聊调用该工具。"
+            "工具返回证据后，仅根据证据回答用户文档相关的问题，并用 [S序号] 标注对应来源。"
             "仅使用原生工具调用接口，绝不在回答中输出 DSML、XML、JSON 或其他工具语法。"
         )
     return AIMessage(
@@ -74,6 +75,8 @@ def _context_text(request: AIRequest, max_context_chars: int) -> str:
         metadata = [f"来源：{context.title}", f"ID：{context.source_id}"]
         if context.chunk_id:
             metadata.append(f"分块：{context.chunk_id}")
+        if context.asset_id:
+            metadata.append(f"图片资源：{context.asset_id}")
         if context.heading_path:
             metadata.append(f"章节：{' > '.join(context.heading_path)}")
 
@@ -137,7 +140,7 @@ def _build_tool_continuation_messages(request: AIRequest, context_text: str) -> 
         if message.role in {MessageRole.USER, MessageRole.ASSISTANT} and not message.tool_calls
     ]
     tool_call = continuation.tool_call
-    tool_result = context_text or "没有找到与本次检索条件匹配的本地知识库内容。"
+    tool_result = context_text or "没有找到与本次检索条件匹配的知识库内容。"
 
     return [
         _system_message(request),

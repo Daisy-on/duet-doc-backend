@@ -116,6 +116,16 @@ async def replace_document_media_refs(
     if removed_ids:
         await session.execute(
             text(
+                "DELETE FROM rag_cloud_source_indexes AS idx "
+                "WHERE idx.workspace_id=:wid AND idx.modality='image' "
+                "AND idx.source_id=ANY(CAST(:asset_ids AS text[])) "
+                "AND NOT EXISTS (SELECT 1 FROM document_media_refs AS ref "
+                "WHERE ref.workspace_id=idx.workspace_id AND ref.asset_id=idx.source_id)"
+            ),
+            {"wid": workspace_id, "asset_ids": sorted(removed_ids)},
+        )
+        await session.execute(
+            text(
                 "UPDATE media_assets AS asset SET unreferenced_at=COALESCE(unreferenced_at,now()) "
                 "WHERE workspace_id=:wid AND asset_id=ANY(CAST(:asset_ids AS text[])) "
                 "AND NOT EXISTS (SELECT 1 FROM document_media_refs AS ref "
