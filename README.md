@@ -214,4 +214,6 @@ uv run pyright
 uv run pytest
 ```
 
+检索开发工具保留 `app.chunker_compare`（端云分块对照）和 `app.bge_real_document_probe`（真实文档检索对照）。后者默认仅预览，只有显式加 `--confirm-cloud-calls` 才调用硅基流动接口；不用于生产任务。
+
 数据库结构统一由 Alembic 管理。`docker/postgres/init.sql` 只负责首次创建 pgvector 扩展，不用于维护业务表结构。

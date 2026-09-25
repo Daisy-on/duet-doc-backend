@@ -1,6 +1,7 @@
+import httpx
 import pytest
 
-from app.bge_real_document_probe import compare, local_report, rank, validate
+from app.bge_real_document_probe import compare, fetch_cloud_vectors, local_report, rank, validate
 
 
 def vector(index: int) -> list[float]:
@@ -56,3 +57,36 @@ def test_full_document_rejects_partial_export() -> None:
     data["totalChunkCount"] = 3
     with pytest.raises(ValueError, match="全文样本"):
         validate(data)
+
+
+def test_cloud_response_is_ordered_by_input_index() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer test-key"
+        assert request.url.path == "/v1/embeddings"
+        assert request.read().decode().count("BAAI/bge-large-zh-v1.5") == 1
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"index": 1, "embedding": vector(1)},
+                    {"index": 0, "embedding": vector(0)},
+                ]
+            },
+        )
+
+    with httpx.Client(
+        transport=httpx.MockTransport(handler), headers={"Authorization": "Bearer test-key"}
+    ) as client:
+        result = fetch_cloud_vectors(client, ["第一段", "第二段"])
+
+    assert result[0] == vector(0)
+    assert result[1] == vector(1)
+
+
+def test_cloud_response_rejects_incomplete_batch() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": vector(0)}]})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ValueError, match="incomplete embedding batch"):
+            fetch_cloud_vectors(client, ["第一段", "第二段"])

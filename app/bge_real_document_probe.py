@@ -2,16 +2,40 @@
 
 import argparse
 import json
+import math
 import os
 import sys
 from statistics import median
 
 import httpx
 
-from app.bge_compatibility import MODEL, fetch_cloud_vectors, normalized, similarity
-
 BATCH_SIZE = 8
 MAX_PASSAGES = 2000
+MODEL = "BAAI/bge-large-zh-v1.5"
+URL = "https://api.siliconflow.cn/v1/embeddings"
+DIMENSION = 1024
+
+
+def normalized(vector: list[float]) -> list[float]:
+    if len(vector) != DIMENSION or any(not math.isfinite(value) for value in vector):
+        raise ValueError(f"Expected a finite {DIMENSION}-dimensional vector")
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm == 0:
+        raise ValueError("Embedding vector is empty")
+    return [value / norm for value in vector]
+
+
+def similarity(left: list[float], right: list[float]) -> float:
+    return sum(a * b for a, b in zip(left, right, strict=True))
+
+
+def fetch_cloud_vectors(client: httpx.Client, inputs: list[str]) -> list[list[float]]:
+    response = client.post(URL, json={"model": MODEL, "input": inputs, "encoding_format": "float"})
+    response.raise_for_status()
+    rows = sorted(response.json()["data"], key=lambda row: row["index"])
+    if len(rows) != len(inputs) or [row["index"] for row in rows] != list(range(len(inputs))):
+        raise ValueError("SiliconFlow returned an incomplete embedding batch")
+    return [normalized(row["embedding"]) for row in rows]
 
 
 def validate(fixture: dict) -> tuple[list[dict], list[dict]]:
