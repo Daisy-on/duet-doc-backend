@@ -124,33 +124,64 @@ async def cloud_rag_coverage(
     )
     stale = sum(1 for key in fingerprints if key in indexes) - ready
     missing = len(fingerprints) - ready - stale
-    has_client_index = bool(
-        await session.scalar(
-            text(
-                "SELECT EXISTS (SELECT 1 FROM rag_source_indexes idx JOIN documents doc "
-                "ON doc.workspace_id=idx.workspace_id AND doc.id=idx.source_id "
-                "WHERE idx.workspace_id=:wid AND idx.status='ready' "
-                "AND idx.embedding_model='bge-large-zh-v1.5' "
-                "AND idx.embedding_dimension=1024 "
-                "AND idx.source_revision=doc.revision AND idx.chunker_version='v3' "
-                "AND doc.deleted_at IS NULL)"
-            ),
-            {"wid": workspace_id},
+    client_rows = (
+        (
+            await session.execute(
+                text(
+                    "SELECT source_id,source_revision,status,embedding_model,"
+                    "embedding_dimension,chunker_version FROM rag_source_indexes "
+                    "WHERE workspace_id=:wid"
+                ),
+                {"wid": workspace_id},
+            )
         )
+        .mappings()
+        .all()
     )
-    stale_client_sources = await session.scalar(
-        text(
-            "SELECT count(*) FROM rag_source_indexes idx JOIN documents doc "
-            "ON doc.workspace_id=idx.workspace_id AND doc.id=idx.source_id "
-            "WHERE idx.workspace_id=:wid AND doc.deleted_at IS NULL "
-            "AND (idx.status='stale' OR (idx.status='ready' AND ("
-            "idx.source_revision IS DISTINCT FROM doc.revision "
-            "OR idx.embedding_model IS DISTINCT FROM 'bge-large-zh-v1.5' "
-            "OR idx.embedding_dimension IS DISTINCT FROM 1024 "
-            "OR idx.chunker_version IS DISTINCT FROM 'v3')))"
-        ),
-        {"wid": workspace_id},
+    client_indexes = {row["source_id"]: row for row in client_rows}
+
+    def client_current(row, revision: int) -> bool:
+        return bool(
+            row
+            and row["status"] == "ready"
+            and row["source_revision"] == revision
+            and row["embedding_model"] == "bge-large-zh-v1.5"
+            and row["embedding_dimension"] == 1024
+            and row["chunker_version"] == "v3"
+        )
+
+    def stale_row(row, current: bool) -> bool:
+        return bool(row and (row["status"] == "stale" or row["status"] == "ready" and not current))
+
+    has_client_index = any(
+        client_current(client_indexes.get(row["id"]), row["revision"]) for row in documents
     )
+    stale_client_sources = sum(
+        stale_row(
+            client_indexes.get(row["id"]),
+            client_current(client_indexes.get(row["id"]), row["revision"]),
+        )
+        for row in documents
+    )
+    unavailable_stale_source_ids = []
+    for row in documents:
+        key = ("text", row["id"])
+        local_current = client_current(client_indexes.get(row["id"]), row["revision"])
+        cloud_current = _index_is_current(indexes.get(key), fingerprints[key], "text")
+        if (
+            not local_current
+            and not cloud_current
+            and (
+                stale_row(client_indexes.get(row["id"]), local_current)
+                or stale_row(indexes.get(key), cloud_current)
+            )
+        ):
+            unavailable_stale_source_ids.append(row["id"])
+    for key, fingerprint in fingerprints.items():
+        if key[0] == "image" and stale_row(
+            indexes.get(key), _index_is_current(indexes.get(key), fingerprint, "image")
+        ):
+            unavailable_stale_source_ids.append(key[1])
     active_run = (
         (
             await session.execute(
@@ -169,6 +200,7 @@ async def cloud_rag_coverage(
         ready_sources=ready,
         stale_sources=stale,
         stale_client_sources=stale_client_sources,
+        unavailable_stale_source_ids=unavailable_stale_source_ids,
         missing_sources=missing,
         pending_images=sum(
             1

@@ -10,6 +10,7 @@ class CloudRagCoverage(BaseModel):
     ready_sources: int
     stale_sources: int
     stale_client_sources: int
+    unavailable_stale_source_ids: list[str]
     missing_sources: int
     pending_images: int
     has_client_index: bool
