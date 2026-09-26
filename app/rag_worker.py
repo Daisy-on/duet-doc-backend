@@ -267,8 +267,14 @@ async def finish_job(session, job, status, error=None):
     )
 
 
+def is_retryable_job_error(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in {408, 429} or exc.response.status_code >= 500
+    return isinstance(exc, httpx.TransportError)
+
+
 async def fail_job(sessions, settings, job, exc):
-    retry = job["attempts"] + 1 < settings.rag_worker_max_attempts
+    retry = is_retryable_job_error(exc) and job["attempts"] + 1 < settings.rag_worker_max_attempts
     async with sessions() as session:
         if retry:
             await session.execute(
