@@ -138,6 +138,19 @@ async def cloud_rag_coverage(
             {"wid": workspace_id},
         )
     )
+    stale_client_sources = await session.scalar(
+        text(
+            "SELECT count(*) FROM rag_source_indexes idx JOIN documents doc "
+            "ON doc.workspace_id=idx.workspace_id AND doc.id=idx.source_id "
+            "WHERE idx.workspace_id=:wid AND doc.deleted_at IS NULL "
+            "AND (idx.status='stale' OR (idx.status='ready' AND ("
+            "idx.source_revision IS DISTINCT FROM doc.revision "
+            "OR idx.embedding_model IS DISTINCT FROM 'bge-large-zh-v1.5' "
+            "OR idx.embedding_dimension IS DISTINCT FROM 1024 "
+            "OR idx.chunker_version IS DISTINCT FROM 'v3')))"
+        ),
+        {"wid": workspace_id},
+    )
     active_run = (
         (
             await session.execute(
@@ -155,6 +168,7 @@ async def cloud_rag_coverage(
         current_sources=len(fingerprints),
         ready_sources=ready,
         stale_sources=stale,
+        stale_client_sources=stale_client_sources,
         missing_sources=missing,
         pending_images=sum(
             1
