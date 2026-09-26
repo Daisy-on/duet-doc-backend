@@ -119,6 +119,7 @@ def chat_message(status="complete"):
                     "title": "Note",
                     "chunk_index": 0,
                     "heading_path": ["Section"],
+                    "excerpt": "A cited passage",
                 }
             ],
             "ai_metadata": {"provider": "deepseek", "usage": {"totalTokens": 42}},
@@ -345,6 +346,7 @@ async def test_chat_session_and_message_sync(sync_client):
     ]
     message_snapshot = page["changes"][1]["snapshot"]
     assert message_snapshot["content"] == "A synced answer"
+    assert message_snapshot["knowledge_sources"][0]["excerpt"] == "A cited passage"
     assert message_snapshot["ai_metadata"]["usage"]["totalTokens"] == 42
 
     delete_session = {

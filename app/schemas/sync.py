@@ -60,6 +60,7 @@ class KnowledgeSource(SyncModel):
     title: str = Field(max_length=1000)
     chunk_index: int = Field(ge=0)
     heading_path: list[str] = Field(default_factory=list, max_length=20)
+    excerpt: str | None = Field(default=None, max_length=400)
 
 
 class ChatMessageData(SyncModel):
