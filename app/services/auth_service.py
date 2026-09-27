@@ -22,6 +22,7 @@ from app.schemas.auth import AuthResponse, AuthUser, LoginRequest, RegisterReque
 DEFAULT_DOCUMENT_CONTENT = json.dumps(
     {"type": "doc", "content": [{"type": "paragraph"}]}, separators=(",", ":")
 )
+DEFAULT_KNOWLEDGE_BASE_COLOR = "#f59e0b"
 DUMMY_PASSWORD_HASH = hash_password("duet-doc-invalid-password")
 
 
@@ -119,9 +120,14 @@ async def register_user(
                 text(
                     "INSERT INTO knowledge_bases "
                     "(workspace_id,id,revision,created_at,updated_at,name,description,icon) "
-                    "VALUES (:wid,:id,1,:now,:now,'我的知识库','','book-open')"
+                    "VALUES (:wid,:id,1,:now,:now,'我的知识库','',:icon)"
                 ),
-                {"wid": workspace_id, "id": kb_id, "now": now},
+                {
+                    "wid": workspace_id,
+                    "id": kb_id,
+                    "now": now,
+                    "icon": DEFAULT_KNOWLEDGE_BASE_COLOR,
+                },
             )
             await session.execute(
                 text(
@@ -148,7 +154,7 @@ async def register_user(
                 "deleted_at": None,
                 "name": "我的知识库",
                 "description": "",
-                "icon": "book-open",
+                "icon": DEFAULT_KNOWLEDGE_BASE_COLOR,
             }
             document_snapshot = {
                 "workspace_id": str(workspace_id),

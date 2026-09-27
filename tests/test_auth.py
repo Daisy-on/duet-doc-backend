@@ -77,7 +77,7 @@ async def test_register_provisions_identity_workspace_and_syncable_defaults(auth
             (
                 await session.execute(
                     text(
-                        "SELECT w.sync_sequence,k.name,d.title,d.content_format,d.content "
+                        "SELECT w.sync_sequence,k.name,k.icon,d.title,d.content_format,d.content "
                         "FROM workspaces w JOIN knowledge_bases k ON k.workspace_id=w.id "
                         "JOIN documents d ON d.workspace_id=w.id AND d.kb_id=k.id "
                         "WHERE w.id=:workspace"
@@ -90,9 +90,20 @@ async def test_register_provisions_identity_workspace_and_syncable_defaults(auth
         )
         assert defaults["sync_sequence"] == 2
         assert defaults["name"] == "我的知识库"
+        assert defaults["icon"] == "#f59e0b"
         assert defaults["title"] == "未命名文档"
         assert defaults["content_format"] == "tiptap_json"
         assert "开始书写" not in defaults["content"]
+        assert (
+            await session.scalar(
+                text(
+                    "SELECT snapshot->>'icon' FROM sync_changes "
+                    "WHERE workspace_id=:workspace AND entity_type='knowledge_base'"
+                ),
+                {"workspace": body["workspace_id"]},
+            )
+            == "#f59e0b"
+        )
         assert (
             await session.scalar(
                 text("SELECT count(*) FROM sync_changes WHERE workspace_id=:workspace"),
@@ -186,4 +197,3 @@ async def test_cookie_endpoints_reject_untrusted_browser_origin(auth_client) -> 
         headers={"Origin": "https://malicious.example"},
     )
     assert response.status_code == 403
-
